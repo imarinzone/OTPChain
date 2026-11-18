@@ -40,13 +40,16 @@ import com.example.ui.components.LatestOtpHeroCard
 import com.example.ui.components.NotificationAccessBanner
 import com.example.ui.components.NotificationPermissionBanner
 import com.example.ui.components.OtpHistoryRowCard
+import com.example.ui.components.SmsPermissionBanner
 import com.example.ui.components.SyncStatusHeroCard
 
 @Composable
 fun VaultScreen(
     uiState: CodeChainUiState,
+    hasReceiveSms: Boolean,
     hasNotificationAccess: Boolean,
     needsNotificationPermission: Boolean,
+    onRequestSmsPermission: () -> Unit,
     onRequestNotificationAccess: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
     onToggleSync: (Boolean) -> Unit,
@@ -89,11 +92,19 @@ fun VaultScreen(
             SyncStatusHeroCard(
                 activeChain = activeChain,
                 isSyncEnabled = settings?.isSyncEnabled ?: true,
-                hasNotificationAccess = hasNotificationAccess,
+                hasAutoSms = hasReceiveSms || hasNotificationAccess,
                 relayState = uiState.relayState,
                 onToggleSync = onToggleSync,
                 onOpenChainSetup = onOpenChainTab
             )
+        }
+
+        if (!hasReceiveSms) {
+            item {
+                SmsPermissionBanner(
+                    onRequestSmsPermission = onRequestSmsPermission
+                )
+            }
         }
 
         if (!hasNotificationAccess) {

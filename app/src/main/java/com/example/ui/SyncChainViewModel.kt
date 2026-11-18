@@ -4,13 +4,13 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.CodeChainApplication
-import com.example.data.local.OtpDirection
 import com.example.data.local.SyncedOtpEntity
 import com.example.data.prefs.ChainSettingsState
 import com.example.data.relay.RelayConnectionState
 import com.example.data.relay.RelayEnvelope
 import com.example.notifications.ClipboardHelper
-import com.example.otp.OtpParser
+import com.example.otp.OtpSyncCoordinator
+import com.example.otp.OtpSyncOutcome
 import com.example.security.E2eeCryptoManager
 import com.example.security.PairingPayload
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -29,8 +29,7 @@ data class CodeChainUiState(
     val settings: ChainSettingsState? = null,
     val otps: List<SyncedOtpEntity> = emptyList(),
     val relayState: RelayConnectionState = RelayConnectionState.Unpaired,
-    val isSending: Boolean = false,
-    val lastDetectedPreview: String? = null
+    val isSending: Boolean = false
 )
 
 class SyncChainViewModel(application: Application) : AndroidViewModel(application) {
@@ -38,7 +37,6 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
     private val prefsRepo = app.preferencesRepository
     private val otpRepo = app.otpRepository
     private val relayClient = app.relayClient
-    private val notificationHelper = app.notificationHelper
 
     private val _isSending = MutableStateFlow(false)
     private val _events = MutableSharedFlow<String>(extraBufferCapacity = 16)
@@ -67,81 +65,8 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
 
     init {
         viewModelScope.launch {
-            prefsRepo.ensureDeviceIdInitialized()
-            otpRepo.purgeExpired()
-        }
-
-        // Keep WebSocket relay subscription synchronized with local settings & toggles
-        viewModelScope.launch {
-            prefsRepo.state.collect { settings ->
-                val chain = settings.activeChain
-                relayClient.updateSubscription(
-                    hasChain = chain != null,
-                    shouldListen = settings.isSyncEnabled && settings.receiveInboundEnabled,
-                    relayBaseUrl = settings.relayBaseUrl,
-                    blindedTopic = chain?.blindedTopic
-                )
-            }
-        }
-
-        // Listen for incoming E2EE frames
-        viewModelScope.launch {
-            relayClient.incomingCiphertexts.collect { ciphertext ->
-                handleIncomingCiphertext(ciphertext)
-            }
-        }
-    }
-
-    private suspend fun handleIncomingCiphertext(ciphertext: String) {
-        val settings = uiState.value.settings ?: return
-        val chain = settings.activeChain ?: return
-
-        val decryptedJson = runCatching {
-            E2eeCryptoManager.decrypt(ciphertext, chain.masterKeyBytes, chain.chainId)
-        }.getOrNull() ?: return // Ignore undecryptable packets cleanly
-
-        val envelope = relayClient.decodeEnvelope(decryptedJson) ?: return
-        if (envelope.senderDeviceId == settings.localDeviceId) {
-            return // Ignore own echoes
-        }
-
-        when (envelope.type) {
-            "PAIR_ACK" -> {
-                prefsRepo.confirmPeer(envelope.senderDeviceName)
-                _events.tryEmit("Sync chain verified with ${envelope.senderDeviceName}")
-            }
-            "PING" -> {
-                prefsRepo.confirmPeer(envelope.senderDeviceName)
-                _events.tryEmit("Verified E2EE ping from ${envelope.senderDeviceName}")
-            }
-            "UNPAIR" -> {
-                _events.tryEmit("${envelope.senderDeviceName} turned off or severed this chain")
-            }
-            "OTP" -> {
-                if (!settings.isSyncEnabled || !settings.receiveInboundEnabled) return
-                val now = System.currentTimeMillis()
-                val expiresAt = computeExpiry(now, settings.retentionHours)
-                val inserted = otpRepo.insertIfNew(
-                    SyncedOtpEntity(
-                        messageUuid = envelope.messageUuid,
-                        serviceName = envelope.serviceName.ifBlank { "2FA Verification" },
-                        otpCode = envelope.otpCode,
-                        rawSnippet = envelope.snippet,
-                        direction = OtpDirection.INBOUND.name,
-                        peerDeviceName = envelope.senderDeviceName.ifBlank { chain.peerDeviceName },
-                        timestamp = envelope.sentAtEpochMs.takeIf { it > 0 } ?: now,
-                        expiresAt = expiresAt,
-                        isCopied = false
-                    )
-                )
-                if (inserted && settings.notificationsEnabled) {
-                    notificationHelper.showSyncedOtpNotification(
-                        messageUuid = envelope.messageUuid,
-                        serviceName = envelope.serviceName.ifBlank { "2FA Code" },
-                        otpCode = envelope.otpCode,
-                        peerDeviceName = envelope.senderDeviceName.ifBlank { chain.peerDeviceName }
-                    )
-                }
+            app.appEvents.collect { msg ->
+                _events.tryEmit(msg)
             }
         }
     }
@@ -179,7 +104,6 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
                 isPeerConfirmed = true,
                 relayBaseUrl = payload.relayBaseUrl
             )
-            // Transmit encrypted PAIR_ACK so host confirms pairing immediately
             val keyBytes = E2eeCryptoManager.decodeBase64Url(payload.masterKeyBase64)
             val topic = E2eeCryptoManager.deriveBlindedTopic(keyBytes)
             val ack = RelayEnvelope(
@@ -223,65 +147,27 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun extractAndSyncOtp(rawText: String, senderHint: String = "SMS Alert") {
         viewModelScope.launch {
-            val extracted = OtpParser.extractOtp(rawText, senderHint)
-            if (extracted == null) {
-                _events.tryEmit("No 4–8 digit 2FA code found in message")
-                return@launch
-            }
-            val settings = uiState.value.settings
-            val chain = settings?.activeChain
-            if (chain == null) {
-                _events.tryEmit("Pair a device on the Chain tab before syncing")
-                return@launch
-            }
-            if (!settings.isSyncEnabled || !settings.sendOutboundEnabled) {
-                _events.tryEmit("Outbound sync is paused on this device")
-                return@launch
-            }
-
             _isSending.value = true
             try {
-                val now = System.currentTimeMillis()
-                val msgUuid = UUID.randomUUID().toString()
-                val envelope = RelayEnvelope(
-                    messageUuid = msgUuid,
-                    type = "OTP",
-                    senderDeviceId = settings.localDeviceId,
-                    senderDeviceName = settings.localDeviceName,
-                    otpCode = extracted.code,
-                    serviceName = extracted.serviceName,
-                    snippet = extracted.snippet,
-                    sentAtEpochMs = now
-                )
-                val encrypted = E2eeCryptoManager.encrypt(
-                    plaintext = relayClient.encodeEnvelope(envelope),
-                    masterKey = chain.masterKeyBytes,
-                    chainId = chain.chainId
-                )
-                val result = relayClient.publishCiphertext(
-                    relayBaseUrl = settings.relayBaseUrl,
-                    blindedTopic = chain.blindedTopic,
-                    ciphertextToken = encrypted
-                )
-                if (result.isSuccess) {
-                    otpRepo.insertIfNew(
-                        SyncedOtpEntity(
-                            messageUuid = msgUuid,
-                            serviceName = extracted.serviceName,
-                            otpCode = extracted.code,
-                            rawSnippet = extracted.snippet,
-                            direction = OtpDirection.OUTBOUND.name,
-                            peerDeviceName = chain.peerDeviceName,
-                            timestamp = now,
-                            expiresAt = computeExpiry(now, settings.retentionHours),
-                            isCopied = false
-                        )
+                when (
+                    val outcome = OtpSyncCoordinator.processAndSyncText(
+                        context = app,
+                        rawText = rawText,
+                        fallbackSender = senderHint,
+                        deduplicate = false
                     )
-                    _events.tryEmit("Encrypted & synced ${extracted.code} (${extracted.serviceName})")
-                } else {
-                    _events.tryEmit(
-                        "Relay send failed: ${result.exceptionOrNull()?.localizedMessage ?: "Check network"}"
-                    )
+                ) {
+                    is OtpSyncOutcome.Synced ->
+                        _events.tryEmit("Encrypted & synced ${outcome.code} (${outcome.serviceName})")
+                    OtpSyncOutcome.NoOtpFound ->
+                        _events.tryEmit("No 4–8 digit 2FA code found in message")
+                    OtpSyncOutcome.NoActiveChain ->
+                        _events.tryEmit("Pair a device on the Chain tab before syncing")
+                    OtpSyncOutcome.OutboundPaused ->
+                        _events.tryEmit("Outbound sync is paused on this device")
+                    is OtpSyncOutcome.RelayFailed ->
+                        _events.tryEmit("Relay send failed: ${outcome.reason}")
+                    OtpSyncOutcome.DuplicateSkipped -> Unit
                 }
             } finally {
                 _isSending.value = false
@@ -406,9 +292,5 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
             otpRepo.clearAll()
             _events.tryEmit("Local OTP history cleared")
         }
-    }
-
-    private fun computeExpiry(now: Long, retentionHours: Int): Long {
-        return if (retentionHours <= 0) Long.MAX_VALUE else now + retentionHours * 3_600_000L
     }
 }

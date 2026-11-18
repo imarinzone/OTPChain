@@ -9,14 +9,16 @@ data class ExtractedOtp(
 object OtpParser {
     private val contextKeywords = listOf(
         "otp", "one-time", "one time", "verification", "verify", "code", "passcode",
-        "pin", "2fa", "two-factor", "login", "sign in", "sign-in", "security",
-        "confirm", "auth", "token", "do not share", "never share", "expires", "valid for"
+        "pin", "2fa", "two-factor", "login", "log in", "sign in", "sign-in", "security",
+        "confirm", "auth", "authentication", "authenticate", "token", "secret", "mfa",
+        "totp", "transaction", "authorize", "authorization", "access code", "reset",
+        "do not share", "never share", "expires", "valid for"
     )
 
-    // Matches G-123456, 123456, 123-456, 123 456, or 4-8 digit codes bounded by non-digits
+    // Matches G-123456, 123456, 123-456, 123 456, or 4-8 digit codes while rejecting timestamps (12:30) and prices ($12.34)
     private val googlePrefixPattern = Regex("""\bG-(\d{6})\b""")
     private val groupedDigitsPattern = Regex("""(?<!\d)(\d{3})[-\s](\d{3})(?!\d)""")
-    private val plainDigitsPattern = Regex("""(?<![\d.$:/\-+])(\d{4,8})(?![\d.$:/\-])""")
+    private val plainDigitsPattern = Regex("""(?<!\d:)(?<![\d.$/\-+])(\d{4,8})(?!:\d)(?![\d.$/\-])""")
     private val alphaNumOtpPattern = Regex("""(?i)\b(?:code|otp|pin|passcode)\s*(?:is|:|-)?\s*([A-Z0-9]{4,8})\b""")
 
     private val leadingBrandPattern = Regex("""^([A-Za-z0-9 &._'-]{2,26})\s*[:\-–|]\s*""")
@@ -29,7 +31,6 @@ object OtpParser {
         val lower = normalized.lowercase()
         val hasContext = contextKeywords.any { lower.contains(it) }
 
-        // If the user pasted just a standalone 4-8 digit code, allow it cleanly
         val pureCodeOnly = normalized.matches(Regex("""^(?:G-)?\d{4,8}$"""))
         if (!hasContext && !pureCodeOnly) {
             return null
@@ -62,7 +63,6 @@ object OtpParser {
             .toList()
 
         if (candidates.isNotEmpty()) {
-            // Prefer 6-digit codes first, then 5/4/7/8
             val preferred = candidates.sortedBy { (_, digits) ->
                 when (digits.length) {
                     6 -> 0
@@ -95,7 +95,6 @@ object OtpParser {
                 }
             }
         }
-        // Reject if preceded by $ / € / £ or followed by % / am / pm
         val prevChar = fullText.getOrNull(range.first - 1)
         if (prevChar == '$' || prevChar == '€' || prevChar == '£' || prevChar == '+') return true
         val after = fullText.substring(range.last + 1, minOf(fullText.length, range.last + 4)).lowercase()

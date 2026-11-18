@@ -85,6 +85,10 @@ class CodeChainCoreTest {
         assertNotNull(spacedSms)
         assertEquals("842109", spacedSms?.code)
 
+        val colonNoSpaceSms = OtpParser.extractOtp("Bank Alert OTP:482910 valid for 5 mins at 12:30pm.")
+        assertNotNull(colonNoSpaceSms)
+        assertEquals("482910", colonNoSpaceSms?.code)
+
         val casualSms = OtpParser.extractOtp("Hey, dinner at 7:30pm near 4th St? Total was $24.50 in 2026.")
         assertNull(casualSms)
     }

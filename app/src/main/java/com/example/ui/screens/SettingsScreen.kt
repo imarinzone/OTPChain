@@ -49,7 +49,9 @@ import com.example.ui.CodeChainUiState
 @Composable
 fun SettingsScreen(
     uiState: CodeChainUiState,
+    hasReceiveSms: Boolean,
     hasNotificationAccess: Boolean,
+    onRequestSmsPermission: () -> Unit,
     onOpenNotificationAccess: () -> Unit,
     onUpdateDeviceName: (String) -> Unit,
     onUpdateRelayUrl: (String) -> Unit,
@@ -87,7 +89,7 @@ fun SettingsScreen(
             }
         }
 
-        // Auto SMS Notification Listener card
+        // Auto SMS Capture & Notification Listener card
         item {
             Surface(
                 shape = RoundedCornerShape(24.dp),
@@ -96,7 +98,7 @@ fun SettingsScreen(
             ) {
                 Column(
                     modifier = Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -109,27 +111,39 @@ fun SettingsScreen(
                         )
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "SMS Notification Access",
+                                text = "Automatic SMS Reading",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                             Text(
-                                text = if (hasNotificationAccess) {
-                                    "Granted — automatically detecting incoming 2FA SMS alerts."
-                                } else {
-                                    "Not granted — enable so CodeChain can read incoming OTP notifications automatically."
+                                text = buildString {
+                                    append("Direct SMS: ")
+                                    append(if (hasReceiveSms) "Granted" else "Not granted")
+                                    append(" · Notification Listener: ")
+                                    append(if (hasNotificationAccess) "Granted" else "Not granted")
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.88f)
                             )
                         }
                     }
-                    FilledTonalButton(
-                        onClick = onOpenNotificationAccess,
-                        shape = CircleShape,
-                        modifier = Modifier.testTag("settings_notification_access_button")
-                    ) {
-                        Text(if (hasNotificationAccess) "Manage Notification Access" else "Grant Notification Access")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (!hasReceiveSms) {
+                            Button(
+                                onClick = onRequestSmsPermission,
+                                shape = CircleShape,
+                                modifier = Modifier.testTag("settings_grant_sms_button")
+                            ) {
+                                Text("Allow SMS")
+                            }
+                        }
+                        FilledTonalButton(
+                            onClick = onOpenNotificationAccess,
+                            shape = CircleShape,
+                            modifier = Modifier.testTag("settings_notification_access_button")
+                        ) {
+                            Text(if (hasNotificationAccess) "Manage Notifications" else "Notification Access")
+                        }
                     }
                 }
             }

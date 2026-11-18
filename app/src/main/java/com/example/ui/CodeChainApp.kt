@@ -130,18 +130,26 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
         )
     }
 
+    var hasReceiveSms by remember {
+        mutableStateOf(NotificationAccessHelper.isReceiveSmsGranted(context))
+    }
     var hasNotificationAccess by remember {
         mutableStateOf(NotificationAccessHelper.isNotificationAccessGranted(context))
     }
     var showNotificationAccessDialog by remember {
-        mutableStateOf(!NotificationAccessHelper.isNotificationAccessGranted(context))
+        mutableStateOf(
+            !NotificationAccessHelper.isReceiveSmsGranted(context) &&
+                !NotificationAccessHelper.isNotificationAccessGranted(context)
+        )
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                hasReceiveSms = NotificationAccessHelper.isReceiveSmsGranted(context)
                 hasNotificationAccess = NotificationAccessHelper.isNotificationAccessGranted(context)
+                NotificationAccessHelper.requestListenerRebindIfGranted(context)
                 hasPostNotificationPerm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     ContextCompat.checkSelfPermission(
                         context,
@@ -160,6 +168,21 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
         context.startActivity(NotificationAccessHelper.createNotificationListenerSettingsIntent(context))
     }
 
+    val smsPermLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasReceiveSms = granted
+        coroutineScope.launch {
+            snackbarHostState.showSnackbar(
+                if (granted) {
+                    "Automatic SMS reading enabled!"
+                } else {
+                    "SMS permission denied; you can still grant Notification Access or share manually."
+                }
+            )
+        }
+    }
+
     val notificationPermLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -168,6 +191,32 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
             coroutineScope.launch {
                 snackbarHostState.showSnackbar("Notification alerts denied; codes still appear in Vault.")
             }
+        }
+    }
+
+    val startupPermissionsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        hasReceiveSms = results[Manifest.permission.RECEIVE_SMS] ?: NotificationAccessHelper.isReceiveSmsGranted(context)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            hasPostNotificationPerm = results[Manifest.permission.POST_NOTIFICATIONS] ?: hasPostNotificationPerm
+        }
+        if (hasReceiveSms) {
+            showNotificationAccessDialog = false
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        val missing = buildList {
+            if (!NotificationAccessHelper.isReceiveSmsGranted(context)) {
+                add(Manifest.permission.RECEIVE_SMS)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPostNotificationPerm) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        if (missing.isNotEmpty()) {
+            startupPermissionsLauncher.launch(missing.toTypedArray())
         }
     }
 
@@ -264,9 +313,13 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
                         composable(CodeChainRoute.Vault.route) {
                             VaultScreen(
                                 uiState = uiState,
+                                hasReceiveSms = hasReceiveSms,
                                 hasNotificationAccess = hasNotificationAccess,
                                 needsNotificationPermission = !hasPostNotificationPerm &&
                                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
+                                onRequestSmsPermission = {
+                                    smsPermLauncher.launch(Manifest.permission.RECEIVE_SMS)
+                                },
                                 onRequestNotificationAccess = openNotificationAccessSettings,
                                 onRequestNotificationPermission = {
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -306,7 +359,11 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
                         composable(CodeChainRoute.Settings.route) {
                             SettingsScreen(
                                 uiState = uiState,
+                                hasReceiveSms = hasReceiveSms,
                                 hasNotificationAccess = hasNotificationAccess,
+                                onRequestSmsPermission = {
+                                    smsPermLauncher.launch(Manifest.permission.RECEIVE_SMS)
+                                },
                                 onOpenNotificationAccess = openNotificationAccessSettings,
                                 onUpdateDeviceName = viewModel::setLocalDeviceName,
                                 onUpdateRelayUrl = viewModel::setRelayBaseUrl,

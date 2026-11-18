@@ -95,7 +95,7 @@ import kotlinx.coroutines.delay
 fun SyncStatusHeroCard(
     activeChain: ActiveChain?,
     isSyncEnabled: Boolean,
-    hasNotificationAccess: Boolean,
+    hasAutoSms: Boolean,
     relayState: RelayConnectionState,
     onToggleSync: (Boolean) -> Unit,
     onOpenChainSetup: () -> Unit,
@@ -258,8 +258,8 @@ fun SyncStatusHeroCard(
                         )
                         StatusPillChip(
                             icon = Icons.Rounded.NotificationsActive,
-                            label = if (hasNotificationAccess) "Auto-SMS" else "Manual",
-                            accentColor = if (hasNotificationAccess) {
+                            label = if (hasAutoSms) "Auto-SMS" else "Manual",
+                            accentColor = if (hasAutoSms) {
                                 StatusEncryptedMint
                             } else {
                                 StatusPausedAmber
@@ -395,6 +395,52 @@ fun NotificationAccessBanner(
                 modifier = Modifier.testTag("grant_notification_access_button")
             ) {
                 Text("Grant")
+            }
+        }
+    }
+}
+
+@Composable
+fun SmsPermissionBanner(
+    onRequestSmsPermission: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.EnhancedEncryption,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Allow Direct SMS Reading",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                Text(
+                    text = "Automatically capture incoming carrier SMS OTPs in the background without opening the app.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f)
+                )
+            }
+            Button(
+                onClick = onRequestSmsPermission,
+                shape = CircleShape,
+                modifier = Modifier.testTag("grant_sms_permission_button")
+            ) {
+                Text("Allow")
             }
         }
     }
