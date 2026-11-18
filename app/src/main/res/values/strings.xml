@@ -1,0 +1,29 @@
+<resources>
+    <string name="app_name">CodeChain</string>
+    <string name="nav_vault">Vault</string>
+    <string name="nav_chain">Chain</string>
+    <string name="nav_settings">Settings</string>
+
+    <string name="sync_active">Sync Active</string>
+    <string name="sync_paused">Sync Paused</string>
+    <string name="sync_unpaired">No Active Chain</string>
+
+    <string name="action_start_chain">Start Chain (Show QR)</string>
+    <string name="action_scan_qr">Scan QR to Join</string>
+    <string name="action_paste_otp">Extract &amp; Sync OTP</string>
+    <string name="action_copy_code">Copy Code</string>
+    <string name="action_copied">Copied</string>
+    <string name="action_sever_chain">Sever Sync Chain</string>
+
+    <string name="notification_channel_name">Synced OTP Alerts</string>
+    <string name="notification_channel_desc">High-priority alerts when an encrypted 2FA code arrives from your paired device.</string>
+    <string name="notification_action_copy">Copy %1$s</string>
+    <string name="notification_otp_title">2FA Code from %1$s</string>
+    <string name="notification_otp_body">Code %1$s synced via %2$s (E2EE)</string>
+
+    <string name="camera_permission_rationale">Camera access is needed only to scan your partner device\'s pairing QR code.</string>
+    <string name="notification_permission_rationale">Allow notifications so new synced OTP codes appear with one-tap Copy.</string>
+    <string name="notification_listener_label">CodeChain SMS OTP Sync</string>
+    <string name="notification_access_title">Allow Notification Access</string>
+    <string name="notification_access_desc">Required to automatically detect incoming SMS 2FA codes and sync them encrypted.</string>
+</resources>

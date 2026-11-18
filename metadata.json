@@ -1,0 +1,6 @@
+{
+  "name": "CodeChain",
+  "description": "End-to-end encrypted OTP SMS sync chain across devices via QR pairing and ephemeral zero-storage relay.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
