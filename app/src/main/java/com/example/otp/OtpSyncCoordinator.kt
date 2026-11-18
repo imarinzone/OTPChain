@@ -12,6 +12,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 sealed interface OtpSyncOutcome {
     data class Synced(val code: String, val serviceName: String) : OtpSyncOutcome
+    data class FilteredByCustomRule(val code: String, val serviceName: String) : OtpSyncOutcome
     data object NoOtpFound : OtpSyncOutcome
     data object DuplicateSkipped : OtpSyncOutcome
     data object NoActiveChain : OtpSyncOutcome
@@ -45,6 +46,18 @@ object OtpSyncCoordinator {
 
         val deviceId = app.preferencesRepository.ensureDeviceIdInitialized()
         val settings = app.preferencesRepository.state.first()
+
+        if (settings.customRulesEnabled && settings.customFilterRules.isNotEmpty()) {
+            val matchedRule = OtpParser.findMatchingCustomRule(
+                rawText = rawText,
+                extracted = extracted,
+                rules = settings.customFilterRules
+            )
+            if (matchedRule == null) {
+                return OtpSyncOutcome.FilteredByCustomRule(extracted.code, extracted.serviceName)
+            }
+        }
+
         val chain = settings.activeChain ?: return OtpSyncOutcome.NoActiveChain
 
         if (!settings.isSyncEnabled || !settings.sendOutboundEnabled) {

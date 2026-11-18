@@ -159,6 +159,8 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
                 ) {
                     is OtpSyncOutcome.Synced ->
                         _events.tryEmit("Encrypted & synced ${outcome.code} (${outcome.serviceName})")
+                    is OtpSyncOutcome.FilteredByCustomRule ->
+                        _events.tryEmit("Skipped ${outcome.code} — didn't match custom filter rules")
                     OtpSyncOutcome.NoOtpFound ->
                         _events.tryEmit("No 4–8 digit 2FA code found in message")
                     OtpSyncOutcome.NoActiveChain ->
@@ -291,6 +293,30 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             otpRepo.clearAll()
             _events.tryEmit("Local OTP history cleared")
+        }
+    }
+
+    fun addCustomRule(rule: String) {
+        val trimmed = rule.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch {
+            prefsRepo.addCustomFilterRule(trimmed)
+            _events.tryEmit("Added OTP filter rule \"$trimmed\"")
+        }
+    }
+
+    fun removeCustomRule(rule: String) {
+        viewModelScope.launch {
+            prefsRepo.removeCustomFilterRule(rule)
+        }
+    }
+
+    fun setCustomRulesEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            prefsRepo.setCustomRulesEnabled(enabled)
+            _events.tryEmit(
+                if (enabled) "Custom OTP rule filter enabled" else "Custom OTP rule filter disabled"
+            )
         }
     }
 }

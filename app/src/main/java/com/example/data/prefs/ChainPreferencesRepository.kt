@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.security.E2eeCryptoManager
 import com.example.security.KeystoreVault
@@ -57,7 +58,9 @@ data class ChainSettingsState(
     val receiveInboundEnabled: Boolean,
     val relayBaseUrl: String,
     val retentionHours: Int, // 1, 24, 168, or -1 (manual)
-    val notificationsEnabled: Boolean
+    val notificationsEnabled: Boolean,
+    val customRulesEnabled: Boolean,
+    val customFilterRules: List<String>
 )
 
 class ChainPreferencesRepository(private val context: Context) {
@@ -74,6 +77,8 @@ class ChainPreferencesRepository(private val context: Context) {
         val RELAY_BASE_URL = stringPreferencesKey("relay_base_url")
         val RETENTION_HOURS = intPreferencesKey("retention_hours")
         val NOTIFICATIONS_ENABLED = booleanPreferencesKey("notifications_enabled")
+        val CUSTOM_RULES_ENABLED = booleanPreferencesKey("custom_rules_enabled")
+        val CUSTOM_FILTER_RULES = stringSetPreferencesKey("custom_filter_rules")
     }
 
     val state: Flow<ChainSettingsState> = context.chainDataStore.data.map { prefs ->
@@ -111,7 +116,12 @@ class ChainPreferencesRepository(private val context: Context) {
             receiveInboundEnabled = prefs[Keys.RECEIVE_INBOUND_ENABLED] ?: true,
             relayBaseUrl = prefs[Keys.RELAY_BASE_URL] ?: PairingPayload.DEFAULT_RELAY_URL,
             retentionHours = prefs[Keys.RETENTION_HOURS] ?: 24,
-            notificationsEnabled = prefs[Keys.NOTIFICATIONS_ENABLED] ?: true
+            notificationsEnabled = prefs[Keys.NOTIFICATIONS_ENABLED] ?: true,
+            customRulesEnabled = prefs[Keys.CUSTOM_RULES_ENABLED] ?: true,
+            customFilterRules = (prefs[Keys.CUSTOM_FILTER_RULES] ?: emptySet())
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .sortedBy { it.lowercase() }
         )
     }
 
@@ -195,5 +205,34 @@ class ChainPreferencesRepository(private val context: Context) {
 
     suspend fun setNotificationsEnabled(enabled: Boolean) {
         context.chainDataStore.edit { it[Keys.NOTIFICATIONS_ENABLED] = enabled }
+    }
+
+    suspend fun addCustomFilterRule(rule: String) {
+        val trimmed = rule.trim()
+        if (trimmed.isEmpty()) return
+        context.chainDataStore.edit { prefs ->
+            val current = prefs[Keys.CUSTOM_FILTER_RULES] ?: emptySet()
+            val updated = current.filterNot { it.equals(trimmed, ignoreCase = true) }.toMutableSet()
+            updated.add(trimmed)
+            prefs[Keys.CUSTOM_FILTER_RULES] = updated
+            prefs[Keys.CUSTOM_RULES_ENABLED] = true
+        }
+    }
+
+    suspend fun removeCustomFilterRule(rule: String) {
+        context.chainDataStore.edit { prefs ->
+            val current = prefs[Keys.CUSTOM_FILTER_RULES] ?: emptySet()
+            prefs[Keys.CUSTOM_FILTER_RULES] = current.filterNot { it.equals(rule, ignoreCase = true) }.toSet()
+        }
+    }
+
+    suspend fun setCustomRulesEnabled(enabled: Boolean) {
+        context.chainDataStore.edit { it[Keys.CUSTOM_RULES_ENABLED] = enabled }
+    }
+
+    suspend fun clearCustomFilterRules() {
+        context.chainDataStore.edit { prefs ->
+            prefs.remove(Keys.CUSTOM_FILTER_RULES)
+        }
     }
 }

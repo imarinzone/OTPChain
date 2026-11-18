@@ -47,6 +47,20 @@ object OtpParser {
         )
     }
 
+    fun findMatchingCustomRule(
+        rawText: String,
+        extracted: ExtractedOtp,
+        rules: List<String>
+    ): String? {
+        if (rules.isEmpty()) return null
+        val haystack = "${rawText.trim()} ${extracted.serviceName} ${extracted.snippet}"
+            .replace(Regex("""\s+"""), " ")
+        return rules.firstOrNull { rule ->
+            val needle = rule.trim()
+            needle.isNotEmpty() && haystack.contains(needle, ignoreCase = true)
+        }
+    }
+
     private fun findBestCode(text: String): String? {
         googlePrefixPattern.find(text)?.let { return "G-${it.groupValues[1]}" }
 
