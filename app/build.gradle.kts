@@ -16,8 +16,9 @@ android {
     applicationId = "com.aistudio.codechain.k9m4vx"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+    versionCode = 100 + (ciRunNumber ?: 0)
+    versionName = if (ciRunNumber != null) "1.1.$ciRunNumber" else "1.1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

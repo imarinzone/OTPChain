@@ -137,10 +137,7 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
         mutableStateOf(NotificationAccessHelper.isNotificationAccessGranted(context))
     }
     var showNotificationAccessDialog by remember {
-        mutableStateOf(
-            !NotificationAccessHelper.isReceiveSmsGranted(context) &&
-                !NotificationAccessHelper.isNotificationAccessGranted(context)
-        )
+        mutableStateOf(!NotificationAccessHelper.isNotificationAccessGranted(context))
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -200,9 +197,6 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
         hasReceiveSms = results[Manifest.permission.RECEIVE_SMS] ?: NotificationAccessHelper.isReceiveSmsGranted(context)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             hasPostNotificationPerm = results[Manifest.permission.POST_NOTIFICATIONS] ?: hasPostNotificationPerm
-        }
-        if (hasReceiveSms) {
-            showNotificationAccessDialog = false
         }
     }
 
@@ -409,7 +403,7 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
             title = { Text(stringResource(R.string.notification_access_title)) },
             text = {
                 Text(
-                    "To automatically detect incoming SMS 2FA codes and sync them encrypted to your paired device, grant CodeChain Notification Access in Android Settings."
+                    "Grant Notification Access so CodeChain can intercept incoming SMS notifications automatically. On Android 13+ sideloaded APKs, if the toggle is grayed out, tap App Info → ⋮ → Allow restricted settings first."
                 )
             },
             confirmButton = {
@@ -420,15 +414,17 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
                     },
                     modifier = Modifier.testTag("dialog_grant_notification_access_button")
                 ) {
-                    Text("Open Settings")
+                    Text("Notification Access")
                 }
             },
             dismissButton = {
                 TextButton(
-                    onClick = { showNotificationAccessDialog = false },
-                    modifier = Modifier.testTag("dialog_later_notification_access_button")
+                    onClick = {
+                        context.startActivity(NotificationAccessHelper.createAppInfoIntent(context))
+                    },
+                    modifier = Modifier.testTag("dialog_app_info_button")
                 ) {
-                    Text("Later")
+                    Text("App Info")
                 }
             }
         )
