@@ -89,10 +89,16 @@ fun VaultScreen(
         }
 
         item {
+            val activeRuleCount = if (settings?.customRulesEnabled == true) {
+                settings.customFilterRules.size
+            } else {
+                0
+            }
             SyncStatusHeroCard(
                 activeChain = activeChain,
                 isSyncEnabled = settings?.isSyncEnabled ?: true,
                 hasAutoSms = hasReceiveSms || hasNotificationAccess,
+                activeCustomRuleCount = activeRuleCount,
                 relayState = uiState.relayState,
                 onToggleSync = onToggleSync,
                 onOpenChainSetup = onOpenChainTab

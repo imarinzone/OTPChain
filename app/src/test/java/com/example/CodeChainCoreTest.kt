@@ -92,4 +92,21 @@ class CodeChainCoreTest {
         val casualSms = OtpParser.extractOtp("Hey, dinner at 7:30pm near 4th St? Total was $24.50 in 2026.")
         assertNull(casualSms)
     }
+
+    @Test
+    fun `custom filter rules narrow synced otps on top of normal detection`() {
+        val rules = listOf("Chase", "GitHub")
+
+        val chaseText = "Chase: Your one-time verification code is 482910."
+        val chaseOtp = OtpParser.extractOtp(chaseText)!!
+        assertEquals("Chase", OtpParser.findMatchingCustomRule(chaseText, chaseOtp, rules))
+
+        val githubText = "Use 842 109 as your github login code."
+        val githubOtp = OtpParser.extractOtp(githubText)!!
+        assertEquals("GitHub", OtpParser.findMatchingCustomRule(githubText, githubOtp, rules))
+
+        val otherBankText = "AcmeBank: Your verification code is 112233."
+        val otherOtp = OtpParser.extractOtp(otherBankText)!!
+        assertNull(OtpParser.findMatchingCustomRule(otherBankText, otherOtp, rules))
+    }
 }

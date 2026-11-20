@@ -2,6 +2,8 @@ package com.example.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,18 +17,23 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoDelete
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Dns
+import androidx.compose.material.icons.rounded.FilterAlt
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -46,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import com.example.security.PairingPayload
 import com.example.ui.CodeChainUiState
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
     uiState: CodeChainUiState,
@@ -53,6 +61,10 @@ fun SettingsScreen(
     hasNotificationAccess: Boolean,
     onRequestSmsPermission: () -> Unit,
     onOpenNotificationAccess: () -> Unit,
+    onAddQuickTile: () -> Unit,
+    onAddCustomRule: (String) -> Unit,
+    onRemoveCustomRule: (String) -> Unit,
+    onToggleCustomRulesEnabled: (Boolean) -> Unit,
     onUpdateDeviceName: (String) -> Unit,
     onUpdateRelayUrl: (String) -> Unit,
     onUpdateRetentionHours: (Int) -> Unit,
@@ -67,6 +79,7 @@ fun SettingsScreen(
     var relayUrlDraft by remember(settings.relayBaseUrl) {
         mutableStateOf(settings.relayBaseUrl)
     }
+    var customRuleDraft by remember { mutableStateOf("") }
 
     LazyColumn(
         modifier = modifier
@@ -144,6 +157,151 @@ fun SettingsScreen(
                         ) {
                             Text(if (hasNotificationAccess) "Manage Notifications" else "Notification Access")
                         }
+                    }
+                }
+            }
+        }
+
+        // Custom OTP Filter Rules card
+        item {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.FilterAlt,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Custom OTP Filter Rules",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                text = if (settings.customFilterRules.isEmpty()) {
+                                    "Optional: add keywords (e.g. Chase, GitHub) to only sync matching OTPs."
+                                } else if (settings.customRulesEnabled) {
+                                    "Active: syncing only OTPs matching ${settings.customFilterRules.size} rule(s)."
+                                } else {
+                                    "Paused: syncing all detected OTP messages."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = settings.customRulesEnabled,
+                            enabled = settings.customFilterRules.isNotEmpty(),
+                            onCheckedChange = onToggleCustomRulesEnabled,
+                            modifier = Modifier.testTag("custom_rules_switch")
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = customRuleDraft,
+                            onValueChange = { customRuleDraft = it },
+                            singleLine = true,
+                            label = { Text("Add keyword or sender") },
+                            placeholder = { Text("e.g. Chase, UPI, Amazon") },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("custom_rule_input")
+                        )
+                        Button(
+                            onClick = {
+                                onAddCustomRule(customRuleDraft)
+                                customRuleDraft = ""
+                            },
+                            enabled = customRuleDraft.isNotBlank(),
+                            shape = CircleShape,
+                            modifier = Modifier.testTag("add_custom_rule_button")
+                        ) {
+                            Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Add")
+                        }
+                    }
+
+                    if (settings.customFilterRules.isNotEmpty()) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            settings.customFilterRules.forEach { rule ->
+                                InputChip(
+                                    selected = settings.customRulesEnabled,
+                                    onClick = { onRemoveCustomRule(rule) },
+                                    label = { Text(rule) },
+                                    trailingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Close,
+                                            contentDescription = "Remove rule $rule",
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    },
+                                    modifier = Modifier.testTag("custom_rule_chip_$rule")
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Quick Settings Tile card
+        item {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(18.dp),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Tune,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "Quick Settings Tile",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                        Text(
+                            text = "Toggle OTP sync on or off right from your notification shade.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f)
+                        )
+                    }
+                    Button(
+                        onClick = onAddQuickTile,
+                        shape = CircleShape,
+                        modifier = Modifier.testTag("add_quick_tile_button")
+                    ) {
+                        Text("Add Tile")
                     }
                 }
             }

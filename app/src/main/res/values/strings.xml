@@ -26,4 +26,8 @@
     <string name="notification_listener_label">CodeChain SMS OTP Sync</string>
     <string name="notification_access_title">Allow Notification Access</string>
     <string name="notification_access_desc">Required to automatically detect incoming SMS 2FA codes and sync them encrypted.</string>
+    <string name="qs_tile_label">OTP Sync</string>
+    <string name="qs_tile_subtitle_active">Syncing On</string>
+    <string name="qs_tile_subtitle_paused">Paused</string>
+    <string name="qs_tile_subtitle_unpaired">Tap to pair</string>
 </resources>

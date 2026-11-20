@@ -20,6 +20,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -91,11 +93,13 @@ import com.example.ui.theme.StatusEncryptedMint
 import com.example.ui.theme.StatusPausedAmber
 import kotlinx.coroutines.delay
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SyncStatusHeroCard(
     activeChain: ActiveChain?,
     isSyncEnabled: Boolean,
     hasAutoSms: Boolean,
+    activeCustomRuleCount: Int,
     relayState: RelayConnectionState,
     onToggleSync: (Boolean) -> Unit,
     onOpenChainSetup: () -> Unit,
@@ -237,10 +241,10 @@ fun SyncStatusHeroCard(
                 }
 
                 if (activeChain != null) {
-                    Row(
+                    FlowRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         StatusPillChip(
                             icon = Icons.Rounded.Lock,
@@ -265,6 +269,13 @@ fun SyncStatusHeroCard(
                                 StatusPausedAmber
                             }
                         )
+                        if (activeCustomRuleCount > 0) {
+                            StatusPillChip(
+                                icon = Icons.Rounded.Shield,
+                                label = "$activeCustomRuleCount Rule${if (activeCustomRuleCount == 1) "" else "s"}",
+                                accentColor = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                 }
             }
@@ -729,6 +740,8 @@ fun OtpHistoryRowCard(
 fun PasteOtpModalSheet(
     initialText: String,
     isSending: Boolean,
+    customRulesEnabled: Boolean,
+    customFilterRules: List<String>,
     onSyncOtp: (rawText: String, senderHint: String) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -743,6 +756,16 @@ fun PasteOtpModalSheet(
             fallbackSender = senderOverride.ifBlank { "SMS Verification" }
         )
     }
+
+    val isCustomFilterActive = customRulesEnabled && customFilterRules.isNotEmpty()
+    val matchedCustomRule = remember(detectedPreview, smsText, customRulesEnabled, customFilterRules) {
+        if (!isCustomFilterActive || detectedPreview == null) {
+            null
+        } else {
+            OtpParser.findMatchingCustomRule(smsText, detectedPreview, customFilterRules)
+        }
+    }
+    val passesCustomFilter = !isCustomFilterActive || matchedCustomRule != null
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -803,7 +826,11 @@ fun PasteOtpModalSheet(
                 detectedPreview?.let { preview ->
                     Surface(
                         shape = RoundedCornerShape(18.dp),
-                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        color = if (passesCustomFilter) {
+                            MaterialTheme.colorScheme.tertiaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.errorContainer
+                        },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
@@ -811,11 +838,22 @@ fun PasteOtpModalSheet(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Column {
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Smart OTP Detected · ${preview.serviceName}",
+                                    text = when {
+                                        !passesCustomFilter ->
+                                            "Blocked by custom rules · ${preview.serviceName}"
+                                        matchedCustomRule != null ->
+                                            "Matched rule \"$matchedCustomRule\" · ${preview.serviceName}"
+                                        else ->
+                                            "Smart OTP Detected · ${preview.serviceName}"
+                                    },
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                                    color = if (passesCustomFilter) {
+                                        MaterialTheme.colorScheme.onTertiaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onErrorContainer
+                                    }
                                 )
                                 Text(
                                     text = preview.code,
@@ -823,13 +861,21 @@ fun PasteOtpModalSheet(
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 24.sp,
                                     letterSpacing = 3.sp,
-                                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                                    color = if (passesCustomFilter) {
+                                        MaterialTheme.colorScheme.onTertiaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onErrorContainer
+                                    }
                                 )
                             }
                             Icon(
                                 imageVector = Icons.Rounded.VerifiedUser,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onTertiaryContainer
+                                tint = if (passesCustomFilter) {
+                                    MaterialTheme.colorScheme.onTertiaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onErrorContainer
+                                }
                             )
                         }
                     }
@@ -857,7 +903,7 @@ fun PasteOtpModalSheet(
                     onClick = {
                         onSyncOtp(smsText, senderOverride.ifBlank { "SMS Verification" })
                     },
-                    enabled = detectedPreview != null && !isSending,
+                    enabled = detectedPreview != null && passesCustomFilter && !isSending,
                     modifier = Modifier
                         .weight(1.3f)
                         .testTag("send_encrypted_otp_button")

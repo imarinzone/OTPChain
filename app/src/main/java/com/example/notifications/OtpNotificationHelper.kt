@@ -83,7 +83,7 @@ class OtpNotificationHelper(private val context: Context) {
         val actionLabel = context.getString(R.string.notification_action_copy, otpCode)
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher_round)
+            .setSmallIcon(R.drawable.ic_stat_codechain)
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText("$body\nTap Copy to paste into your 2FA prompt."))

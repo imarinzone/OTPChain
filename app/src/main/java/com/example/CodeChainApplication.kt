@@ -9,6 +9,7 @@ import com.example.data.prefs.ChainPreferencesRepository
 import com.example.data.relay.EphemeralRelayClient
 import com.example.notifications.OtpNotificationHelper
 import com.example.security.E2eeCryptoManager
+import com.example.tile.SyncQuickTileService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -57,6 +58,7 @@ class CodeChainApplication : Application() {
                     relayBaseUrl = settings.relayBaseUrl,
                     blindedTopic = chain?.blindedTopic
                 )
+                SyncQuickTileService.requestTileUpdate(this@CodeChainApplication)
             }
         }
 

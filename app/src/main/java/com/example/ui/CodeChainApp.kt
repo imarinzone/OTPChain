@@ -60,6 +60,7 @@ import androidx.navigation.compose.rememberNavController
 import com.example.R
 import com.example.otp.NotificationAccessHelper
 import com.example.qr.QrScannerSheet
+import com.example.tile.SyncQuickTileService
 import com.example.ui.components.PasteOtpModalSheet
 import com.example.ui.screens.ChainScreen
 import com.example.ui.screens.SettingsScreen
@@ -359,6 +360,16 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
                                     smsPermLauncher.launch(Manifest.permission.RECEIVE_SMS)
                                 },
                                 onOpenNotificationAccess = openNotificationAccessSettings,
+                                onAddQuickTile = {
+                                    SyncQuickTileService.requestAddTile(context) { message ->
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar(message)
+                                        }
+                                    }
+                                },
+                                onAddCustomRule = viewModel::addCustomRule,
+                                onRemoveCustomRule = viewModel::removeCustomRule,
+                                onToggleCustomRulesEnabled = viewModel::setCustomRulesEnabled,
                                 onUpdateDeviceName = viewModel::setLocalDeviceName,
                                 onUpdateRelayUrl = viewModel::setRelayBaseUrl,
                                 onUpdateRetentionHours = viewModel::setRetentionHours,
@@ -388,6 +399,8 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
         PasteOtpModalSheet(
             initialText = pasteInitialText,
             isSending = uiState.isSending,
+            customRulesEnabled = uiState.settings?.customRulesEnabled ?: true,
+            customFilterRules = uiState.settings?.customFilterRules ?: emptyList(),
             onSyncOtp = { rawText, senderHint ->
                 viewModel.extractAndSyncOtp(rawText, senderHint)
                 showPasteOtpSheet = false
