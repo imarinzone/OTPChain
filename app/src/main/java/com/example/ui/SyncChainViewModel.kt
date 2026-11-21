@@ -90,7 +90,7 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
     fun joinChainFromQr(rawQrText: String): Boolean {
         val parsed = PairingPayload.parse(rawQrText)
         if (parsed.isFailure) {
-            _events.tryEmit(parsed.exceptionOrNull()?.message ?: "Invalid CodeChain QR code")
+            _events.tryEmit(parsed.exceptionOrNull()?.message ?: "Invalid OTP Chain QR code")
             return false
         }
         val payload = parsed.getOrThrow()

@@ -416,7 +416,7 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
             title = { Text(stringResource(R.string.notification_access_title)) },
             text = {
                 Text(
-                    "Grant Notification Access so CodeChain can intercept incoming SMS notifications automatically. On Android 13+ sideloaded APKs, if the toggle is grayed out, tap App Info → ⋮ → Allow restricted settings first."
+                    "Grant Notification Access so OTP Chain can intercept incoming SMS notifications automatically. On Android 13+ sideloaded APKs, if the toggle is grayed out, tap App Info → ⋮ → Allow restricted settings first."
                 )
             },
             confirmButton = {

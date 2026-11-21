@@ -32,8 +32,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.R
 import com.example.data.local.SyncedOtpEntity
 import com.example.ui.CodeChainUiState
 import com.example.ui.components.LatestOtpHeroCard
@@ -76,7 +78,7 @@ fun VaultScreen(
         item {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = "CodeChain",
+                    text = stringResource(R.string.app_name),
                     style = MaterialTheme.typography.displaySmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -315,7 +317,7 @@ private fun EmptyVaultPlaceholder(onOpenPasteOtp: () -> Unit) {
                 textAlign = TextAlign.Center
             )
             Text(
-                text = "Share any verification SMS to CodeChain from your messaging app, or tap Extract & Sync OTP above to forward a code.",
+                text = "Share any verification SMS to OTP Chain from your messaging app, or tap Extract & Sync OTP above to forward a code.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center

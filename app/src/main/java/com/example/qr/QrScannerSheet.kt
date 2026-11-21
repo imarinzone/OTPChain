@@ -156,7 +156,7 @@ fun QrScannerSheet(
                     )
                 }
                 Text(
-                    text = "Point your camera at the partner device's CodeChain QR to establish an end-to-end encrypted link.",
+                    text = "Point your camera at the partner device's OTP Chain QR to establish an end-to-end encrypted link.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -205,14 +205,14 @@ fun QrScannerSheet(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(
-                        text = "Or paste a CodeChain invite link",
+                        text = "Or paste an OTP Chain invite link",
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold
                     )
                     OutlinedTextField(
                         value = manualUri,
                         onValueChange = { manualUri = it },
-                        placeholder = { Text("codechain://pair?v=1&...") },
+                        placeholder = { Text("otpchain://pair?v=1&...") },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()

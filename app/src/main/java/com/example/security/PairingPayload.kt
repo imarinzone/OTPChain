@@ -10,7 +10,7 @@ data class PairingPayload(
 ) {
     fun toUriString(): String {
         return Uri.Builder()
-            .scheme("codechain")
+            .scheme("otpchain")
             .authority("pair")
             .appendQueryParameter("v", "1")
             .appendQueryParameter("id", chainId)
@@ -27,8 +27,8 @@ data class PairingPayload(
         fun parse(rawInput: String): Result<PairingPayload> = runCatching {
             val trimmed = rawInput.trim()
             val uri = Uri.parse(trimmed)
-            require(uri.scheme == "codechain" && uri.host == "pair") {
-                "Not a valid CodeChain QR pairing link."
+            require((uri.scheme == "otpchain" || uri.scheme == "codechain") && uri.host == "pair") {
+                "Not a valid OTP Chain QR pairing link."
             }
             val version = uri.getQueryParameter("v")
             require(version == "1") { "Unsupported pairing QR version." }

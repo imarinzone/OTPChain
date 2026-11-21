@@ -238,7 +238,7 @@ fun ChainScreen(
                                 Box(modifier = Modifier.padding(14.dp)) {
                                     Image(
                                         bitmap = bmp,
-                                        contentDescription = "CodeChain pairing QR code",
+                                        contentDescription = "OTP Chain pairing QR code",
                                         modifier = Modifier.size(210.dp)
                                     )
                                 }
@@ -289,7 +289,7 @@ fun ChainScreen(
                             FilledTonalButton(
                                 onClick = {
                                     pairingUri?.let { uri ->
-                                        ClipboardHelper.copyPlainText(context, "CodeChain Invite", uri)
+                                        ClipboardHelper.copyPlainText(context, "OTP Chain Invite", uri)
                                         onShowMessage("Invite link copied to clipboard")
                                     }
                                 },

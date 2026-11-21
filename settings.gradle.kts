@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "CodeChain"
+rootProject.name = "OTP Chain"
 
 include(":app")

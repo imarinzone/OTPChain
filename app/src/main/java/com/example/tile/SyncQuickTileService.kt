@@ -122,7 +122,7 @@ class SyncQuickTileService : TileService() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 val statusBarManager = context.getSystemService(StatusBarManager::class.java)
                 if (statusBarManager == null) {
-                    onResultMessage("Swipe down twice and tap Edit to add the OTP Sync tile.")
+                    onResultMessage("Swipe down twice and tap Edit to add the OTP Chain tile.")
                     return
                 }
                 statusBarManager.requestAddTileService(
@@ -133,18 +133,18 @@ class SyncQuickTileService : TileService() {
                 ) { resultCode ->
                     val message = when (resultCode) {
                         StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED ->
-                            "OTP Sync Quick Tile added to Quick Settings!"
+                            "OTP Chain Quick Tile added to Quick Settings!"
                         StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED ->
-                            "OTP Sync Quick Tile is already in your Quick Settings."
+                            "OTP Chain Quick Tile is already in your Quick Settings."
                         StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_NOT_ADDED ->
                             "Quick Tile was not added."
                         else ->
-                            "Swipe down twice and tap Edit to add OTP Sync tile."
+                            "Swipe down twice and tap Edit to add the OTP Chain tile."
                     }
                     onResultMessage(message)
                 }
             } else {
-                onResultMessage("Swipe down twice from top and tap the Edit pencil to add the OTP Sync tile.")
+                onResultMessage("Swipe down twice from top and tap the Edit pencil to add the OTP Chain tile.")
             }
         }
     }

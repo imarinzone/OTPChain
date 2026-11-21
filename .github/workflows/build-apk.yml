@@ -115,7 +115,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: app/build/outputs/apk/debug/app-debug.apk
-          name: CodeChain ${{ github.ref_name }}
+          name: OTP Chain ${{ github.ref_name }}
           draft: false
           prerelease: false
         env:
@@ -124,15 +124,15 @@ jobs:
       - name: Prepare Release APK with Custom Name
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/codechain-v1.1.${{ github.run_number }}.apk
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/otp-chain-v1.1.${{ github.run_number }}.apk
 
       - name: Create GitHub Release (Dynamic Build Tag)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/outputs/apk/debug/codechain-v1.1.${{ github.run_number }}.apk
+          files: app/build/outputs/apk/debug/otp-chain-v1.1.${{ github.run_number }}.apk
           tag_name: v1.1.${{ github.run_number }}
-          name: codechain-v1.1.${{ github.run_number }}
+          name: otp-chain-v1.1.${{ github.run_number }}
           draft: false
           prerelease: false
         env:

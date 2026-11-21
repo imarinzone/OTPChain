@@ -195,7 +195,7 @@ class EphemeralRelayClient {
                 .url(url)
                 .post(body)
                 .header("X-Cache", "no") // Enforce zero server-side storage on relay
-                .header("X-Title", "CodeChain E2EE")
+                .header("X-Title", "OTP Chain E2EE")
                 .build()
 
             client.newCall(request).execute().use { response ->

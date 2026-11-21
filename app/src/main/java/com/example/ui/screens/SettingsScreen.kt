@@ -330,7 +330,7 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            text = "You can also share any SMS via Share → CodeChain or paste in Vault. Only the detected 4–8 digit OTP is encrypted with AES-256-GCM.",
+                            text = "You can also share any SMS via Share → OTP Chain or paste in Vault. Only the detected 4–8 digit OTP is encrypted with AES-256-GCM.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
