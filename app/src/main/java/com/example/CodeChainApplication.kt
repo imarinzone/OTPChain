@@ -7,6 +7,8 @@ import com.example.data.local.SyncedOtpEntity
 import com.example.data.local.SyncedOtpRepository
 import com.example.data.prefs.ChainPreferencesRepository
 import com.example.data.relay.EphemeralRelayClient
+import com.example.data.relay.IncomingRelayMessage
+import com.example.data.relay.RelaySubscription
 import com.example.notifications.OtpNotificationHelper
 import com.example.security.E2eeCryptoManager
 import com.example.tile.SyncQuickTileService
@@ -46,35 +48,39 @@ class CodeChainApplication : Application() {
             ensureChannelCreated()
         }
 
-        // Keep WebSocket relay subscription and inbound decryption active at Application scope
+        // Keep WebSocket relay subscriptions and inbound decryption active for all chains
         appScope.launch {
             preferencesRepository.ensureDeviceIdInitialized()
             otpRepository.purgeExpired()
             preferencesRepository.state.collect { settings ->
-                val chain = settings.activeChain
-                relayClient.updateSubscription(
-                    hasChain = chain != null,
-                    shouldListen = settings.isSyncEnabled && settings.receiveInboundEnabled,
-                    relayBaseUrl = settings.relayBaseUrl,
-                    blindedTopic = chain?.blindedTopic
-                )
+                val subscriptions = settings.chains.map { chain ->
+                    RelaySubscription(
+                        chainId = chain.chainId,
+                        relayBaseUrl = chain.relayBaseUrl,
+                        blindedTopic = chain.blindedTopic,
+                        shouldListen = settings.isSyncEnabled &&
+                            chain.isSyncEnabled &&
+                            chain.receiveInboundEnabled
+                    )
+                }
+                relayClient.updateSubscriptions(subscriptions)
                 SyncQuickTileService.requestTileUpdate(this@CodeChainApplication)
             }
         }
 
         appScope.launch {
-            relayClient.incomingCiphertexts.collect { ciphertext ->
-                handleIncomingCiphertext(ciphertext)
+            relayClient.incomingMessages.collect { message ->
+                handleIncomingMessage(message)
             }
         }
     }
 
-    private suspend fun handleIncomingCiphertext(ciphertext: String) {
+    private suspend fun handleIncomingMessage(message: IncomingRelayMessage) {
         val settings = preferencesRepository.state.first()
-        val chain = settings.activeChain ?: return
+        val chain = settings.chains.firstOrNull { it.chainId == message.chainId } ?: return
 
         val decryptedJson = runCatching {
-            E2eeCryptoManager.decrypt(ciphertext, chain.masterKeyBytes, chain.chainId)
+            E2eeCryptoManager.decrypt(message.ciphertext, chain.masterKeyBytes, chain.chainId)
         }.getOrNull() ?: return
 
         val envelope = relayClient.decodeEnvelope(decryptedJson) ?: return
@@ -84,18 +90,18 @@ class CodeChainApplication : Application() {
 
         when (envelope.type) {
             "PAIR_ACK" -> {
-                preferencesRepository.confirmPeer(envelope.senderDeviceName)
+                preferencesRepository.confirmPeer(chain.chainId, envelope.senderDeviceName)
                 _appEvents.tryEmit("Sync chain verified with ${envelope.senderDeviceName}")
             }
             "PING" -> {
-                preferencesRepository.confirmPeer(envelope.senderDeviceName)
+                preferencesRepository.confirmPeer(chain.chainId, envelope.senderDeviceName)
                 _appEvents.tryEmit("Verified E2EE ping from ${envelope.senderDeviceName}")
             }
             "UNPAIR" -> {
-                _appEvents.tryEmit("${envelope.senderDeviceName} turned off or severed this chain")
+                _appEvents.tryEmit("${envelope.senderDeviceName} turned off or severed ${chain.displayTitle}")
             }
             "OTP" -> {
-                if (!settings.isSyncEnabled || !settings.receiveInboundEnabled) return
+                if (!settings.isSyncEnabled || !chain.isSyncEnabled || !chain.receiveInboundEnabled) return
                 val now = System.currentTimeMillis()
                 val expiresAt = if (settings.retentionHours <= 0) {
                     Long.MAX_VALUE
@@ -112,7 +118,8 @@ class CodeChainApplication : Application() {
                         peerDeviceName = envelope.senderDeviceName.ifBlank { chain.peerDeviceName },
                         timestamp = envelope.sentAtEpochMs.takeIf { it > 0 } ?: now,
                         expiresAt = expiresAt,
-                        isCopied = false
+                        isCopied = false,
+                        chainId = chain.chainId
                     )
                 )
                 if (inserted && settings.notificationsEnabled) {
@@ -120,7 +127,7 @@ class CodeChainApplication : Application() {
                         messageUuid = envelope.messageUuid,
                         serviceName = envelope.serviceName.ifBlank { "2FA Code" },
                         otpCode = envelope.otpCode,
-                        peerDeviceName = envelope.senderDeviceName.ifBlank { chain.peerDeviceName }
+                        peerDeviceName = envelope.senderDeviceName.ifBlank { chain.displayTitle }
                     )
                 }
             }

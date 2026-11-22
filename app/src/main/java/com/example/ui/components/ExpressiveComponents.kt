@@ -44,6 +44,8 @@ import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.PauseCircle
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Send
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material3.Button
@@ -97,22 +99,27 @@ import kotlinx.coroutines.delay
 @Composable
 fun SyncStatusHeroCard(
     activeChain: ActiveChain?,
-    isSyncEnabled: Boolean,
+    isGlobalSyncEnabled: Boolean,
+    isChainSyncEnabled: Boolean,
     hasAutoSms: Boolean,
     activeCustomRuleCount: Int,
     relayState: RelayConnectionState,
     onToggleSync: (Boolean) -> Unit,
-    onOpenChainSetup: () -> Unit,
+    onOpenChainSettings: () -> Unit,
+    onOpenChainQr: () -> Unit = onOpenChainSettings,
+    onOpenExtractOtp: (() -> Unit)? = null,
+    onOpenRules: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val isLive = activeChain != null && isSyncEnabled && relayState is RelayConnectionState.Connected
+    val effectiveSyncOn = isGlobalSyncEnabled && isChainSyncEnabled
+    val isLive = activeChain != null && effectiveSyncOn && relayState is RelayConnectionState.Connected
     val containerBrush = Brush.linearGradient(
         colors = when {
             activeChain == null -> listOf(
                 MaterialTheme.colorScheme.surfaceContainerHigh,
                 MaterialTheme.colorScheme.surfaceContainer
             )
-            isSyncEnabled -> listOf(
+            effectiveSyncOn -> listOf(
                 MaterialTheme.colorScheme.primaryContainer,
                 MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.72f)
             )
@@ -135,8 +142,9 @@ fun SyncStatusHeroCard(
     )
 
     Surface(
-        shape = RoundedCornerShape(28.dp),
-        tonalElevation = 3.dp,
+        shape = RoundedCornerShape(30.dp),
+        tonalElevation = 4.dp,
+        shadowElevation = 2.dp,
         modifier = modifier.fillMaxWidth()
     ) {
         Box(
@@ -169,7 +177,7 @@ fun SyncStatusHeroCard(
                                 shape = CircleShape,
                                 color = when {
                                     activeChain == null -> MaterialTheme.colorScheme.surface
-                                    isSyncEnabled -> MaterialTheme.colorScheme.primary
+                                    effectiveSyncOn -> MaterialTheme.colorScheme.primary
                                     else -> MaterialTheme.colorScheme.outline
                                 },
                                 modifier = Modifier.size(44.dp)
@@ -178,7 +186,7 @@ fun SyncStatusHeroCard(
                                     Icon(
                                         imageVector = when {
                                             activeChain == null -> Icons.Rounded.QrCode2
-                                            isSyncEnabled -> Icons.Rounded.Shield
+                                            effectiveSyncOn -> Icons.Rounded.Shield
                                             else -> Icons.Rounded.PauseCircle
                                         },
                                         contentDescription = null,
@@ -193,18 +201,24 @@ fun SyncStatusHeroCard(
                             Text(
                                 text = when {
                                     activeChain == null -> "No Sync Chain Yet"
-                                    isSyncEnabled -> "E2EE Sync Active"
-                                    else -> "Sync Paused Locally"
+                                    else -> activeChain.displayTitle
                                 },
                                 style = MaterialTheme.typography.titleLarge,
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Text(
                                 text = when {
                                     activeChain == null -> "Pair two devices via QR to start"
-                                    !isSyncEnabled -> "Turned off on this device only"
+                                    !isGlobalSyncEnabled -> "All syncs paused (tap switch to resume)"
+                                    !isChainSyncEnabled -> "Paused for this sync"
                                     relayState is RelayConnectionState.Connected ->
-                                        "Live with ${activeChain.peerDeviceName}"
+                                        if (activeChain.isPeerConfirmed) {
+                                            "Live with ${activeChain.peerDeviceName}"
+                                        } else {
+                                            "Live · Tap QR to pair partner"
+                                        }
                                     relayState is RelayConnectionState.Connecting ->
                                         "Connecting ephemeral relay..."
                                     relayState is RelayConnectionState.Error ->
@@ -220,18 +234,39 @@ fun SyncStatusHeroCard(
                     }
 
                     if (activeChain != null) {
-                        Switch(
-                            checked = isSyncEnabled,
-                            onCheckedChange = onToggleSync,
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                                checkedTrackColor = MaterialTheme.colorScheme.primary
-                            ),
-                            modifier = Modifier.testTag("master_sync_switch")
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+                            ) {
+                                IconButton(
+                                    onClick = onOpenChainSettings,
+                                    modifier = Modifier.testTag("chain_card_settings_${activeChain.chainId}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Settings,
+                                        contentDescription = "Settings for ${activeChain.displayTitle}",
+                                        tint = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = effectiveSyncOn,
+                                onCheckedChange = onToggleSync,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                                    checkedTrackColor = MaterialTheme.colorScheme.primary
+                                ),
+                                modifier = Modifier.testTag("master_sync_switch_${activeChain.chainId}")
+                            )
+                        }
                     } else {
                         FilledTonalButton(
-                            onClick = onOpenChainSetup,
+                            onClick = onOpenChainSettings,
                             shape = CircleShape,
                             modifier = Modifier.testTag("hero_pair_button")
                         ) {
@@ -269,12 +304,64 @@ fun SyncStatusHeroCard(
                                 StatusPausedAmber
                             }
                         )
-                        if (activeCustomRuleCount > 0) {
-                            StatusPillChip(
-                                icon = Icons.Rounded.Shield,
-                                label = "$activeCustomRuleCount Rule${if (activeCustomRuleCount == 1) "" else "s"}",
-                                accentColor = MaterialTheme.colorScheme.primary
+                        StatusPillChip(
+                            icon = Icons.Rounded.Shield,
+                            label = if (activeCustomRuleCount > 0) {
+                                "$activeCustomRuleCount Rule${if (activeCustomRuleCount == 1) "" else "s"}"
+                            } else {
+                                "All OTPs"
+                            },
+                            accentColor = if (activeCustomRuleCount > 0) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = if (onOpenRules != null) {
+                                Modifier
+                                    .clip(CircleShape)
+                                    .clickable { onOpenRules() }
+                            } else {
+                                Modifier
+                            }
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        if (onOpenExtractOtp != null) {
+                            Button(
+                                onClick = onOpenExtractOtp,
+                                shape = CircleShape,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("card_extract_otp_${activeChain.chainId}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Share,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(17.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text("Extract & Sync")
+                            }
+                        }
+                        FilledTonalButton(
+                            onClick = onOpenChainQr,
+                            shape = CircleShape,
+                            modifier = Modifier
+                                .height(48.dp)
+                                .testTag("card_qr_button_${activeChain.chainId}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.QrCode2,
+                                contentDescription = "Show QR for ${activeChain.displayTitle}",
+                                modifier = Modifier.size(18.dp)
                             )
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (activeChain.isPeerConfirmed) "QR" else "Pair QR")
                         }
                     }
                 }
@@ -740,6 +827,7 @@ fun OtpHistoryRowCard(
 fun PasteOtpModalSheet(
     initialText: String,
     isSending: Boolean,
+    targetSyncName: String?,
     customRulesEnabled: Boolean,
     customFilterRules: List<String>,
     onSyncOtp: (rawText: String, senderHint: String) -> Unit,
@@ -788,10 +876,19 @@ fun PasteOtpModalSheet(
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary
                 )
-                Text(
-                    text = "Extract & Encrypt OTP",
-                    style = MaterialTheme.typography.titleLarge
-                )
+                Column {
+                    Text(
+                        text = "Extract & Encrypt OTP",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    if (!targetSyncName.isNullOrBlank()) {
+                        Text(
+                            text = "Sending to $targetSyncName",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
             }
             Text(
                 text = "Paste an SMS or share directly from your messaging app. Only the detected 2FA code is encrypted and sent.",

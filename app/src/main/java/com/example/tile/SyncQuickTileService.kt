@@ -38,12 +38,12 @@ class SyncQuickTileService : TileService() {
         val app = applicationContext as? CodeChainApplication ?: return
         tileScope.launch {
             val settings = app.preferencesRepository.state.first()
-            if (settings.activeChain == null) {
+            if (settings.chains.isEmpty()) {
                 openAppToPair()
                 return@launch
             }
             val nextEnabled = !settings.isSyncEnabled
-            app.preferencesRepository.setSyncEnabled(nextEnabled)
+            app.preferencesRepository.setGlobalSyncEnabled(nextEnabled)
             applyStateToTile(settings.copy(isSyncEnabled = nextEnabled))
         }
     }
@@ -58,21 +58,25 @@ class SyncQuickTileService : TileService() {
 
     private fun applyStateToTile(settings: ChainSettingsState) {
         val tile = qsTile ?: return
-        val chain = settings.activeChain
+        val enabledChainsCount = settings.chains.count { it.isSyncEnabled }
         tile.label = getString(R.string.qs_tile_label)
         tile.icon = Icon.createWithResource(this, R.drawable.ic_stat_codechain)
 
         when {
-            chain == null -> {
+            settings.chains.isEmpty() -> {
                 tile.state = Tile.STATE_INACTIVE
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     tile.subtitle = getString(R.string.qs_tile_subtitle_unpaired)
                 }
             }
-            settings.isSyncEnabled -> {
+            settings.isSyncEnabled && enabledChainsCount > 0 -> {
                 tile.state = Tile.STATE_ACTIVE
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    tile.subtitle = getString(R.string.qs_tile_subtitle_active)
+                    tile.subtitle = if (enabledChainsCount > 1) {
+                        "Syncing ($enabledChainsCount)"
+                    } else {
+                        getString(R.string.qs_tile_subtitle_active)
+                    }
                 }
             }
             else -> {

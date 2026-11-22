@@ -11,7 +11,11 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 sealed interface OtpSyncOutcome {
-    data class Synced(val code: String, val serviceName: String) : OtpSyncOutcome
+    data class Synced(
+        val code: String,
+        val serviceName: String,
+        val syncedChainNames: List<String>
+    ) : OtpSyncOutcome
     data class FilteredByCustomRule(val code: String, val serviceName: String) : OtpSyncOutcome
     data object NoOtpFound : OtpSyncOutcome
     data object DuplicateSkipped : OtpSyncOutcome
@@ -24,22 +28,22 @@ object OtpSyncCoordinator {
     private val recentSyncedCodes = ConcurrentHashMap<String, Long>()
     private const val DEDUP_WINDOW_MS = 30_000L
 
+    /**
+     * Extracts an OTP from [rawText] and routes it across matching sync chains.
+     * - When [targetChainId] is null (automatic SMS/notification capture), evaluates every paired
+     *   chain independently using each chain's own toggle state and custom filter rules.
+     * - When [targetChainId] is specified (manual Extract & Sync from a specific chain card),
+     *   evaluates and sends only to that chain.
+     */
     suspend fun processAndSyncText(
         context: Context,
         rawText: String,
         fallbackSender: String,
-        deduplicate: Boolean = true
+        deduplicate: Boolean = true,
+        targetChainId: String? = null
     ): OtpSyncOutcome {
         val extracted = OtpParser.extractOtp(rawText, fallbackSender)
             ?: return OtpSyncOutcome.NoOtpFound
-
-        val now = System.currentTimeMillis()
-        if (deduplicate) {
-            val previous = recentSyncedCodes[extracted.code]
-            if (previous != null && (now - previous) < DEDUP_WINDOW_MS) {
-                return OtpSyncOutcome.DuplicateSkipped
-            }
-        }
 
         val app = context.applicationContext as? CodeChainApplication
             ?: return OtpSyncOutcome.RelayFailed("Application unavailable")
@@ -47,66 +51,45 @@ object OtpSyncCoordinator {
         val deviceId = app.preferencesRepository.ensureDeviceIdInitialized()
         val settings = app.preferencesRepository.state.first()
 
-        if (settings.customRulesEnabled && settings.customFilterRules.isNotEmpty()) {
-            val matchedRule = OtpParser.findMatchingCustomRule(
-                rawText = rawText,
-                extracted = extracted,
-                rules = settings.customFilterRules
-            )
-            if (matchedRule == null) {
-                return OtpSyncOutcome.FilteredByCustomRule(extracted.code, extracted.serviceName)
-            }
+        val candidateChains = if (targetChainId != null) {
+            settings.chains.filter { it.chainId == targetChainId }
+        } else {
+            settings.chains
         }
 
-        val chain = settings.activeChain ?: return OtpSyncOutcome.NoActiveChain
+        if (candidateChains.isEmpty()) {
+            return OtpSyncOutcome.NoActiveChain
+        }
 
-        if (!settings.isSyncEnabled || !settings.sendOutboundEnabled) {
+        if (!settings.isSyncEnabled) {
             return OtpSyncOutcome.OutboundPaused
         }
 
-        if (deduplicate) {
-            recentSyncedCodes[extracted.code] = now
-            if (recentSyncedCodes.size > 32) {
-                recentSyncedCodes.entries.removeIf { (_, ts) -> (now - ts) > 120_000L }
+        val enabledChains = candidateChains.filter { it.isSyncEnabled && it.sendOutboundEnabled }
+        if (enabledChains.isEmpty()) {
+            return OtpSyncOutcome.OutboundPaused
+        }
+
+        val matchingChains = enabledChains.filter { chain ->
+            if (!chain.customRulesEnabled || chain.customFilterRules.isEmpty()) {
+                true
+            } else {
+                OtpParser.findMatchingCustomRule(
+                    rawText = rawText,
+                    extracted = extracted,
+                    rules = chain.customFilterRules
+                ) != null
             }
         }
 
-        val msgUuid = UUID.randomUUID().toString()
-        val envelope = RelayEnvelope(
-            messageUuid = msgUuid,
-            type = "OTP",
-            senderDeviceId = deviceId,
-            senderDeviceName = settings.localDeviceName,
-            otpCode = extracted.code,
-            serviceName = extracted.serviceName,
-            snippet = extracted.snippet,
-            sentAtEpochMs = now
-        )
-
-        val encrypted = runCatching {
-            E2eeCryptoManager.encrypt(
-                plaintext = app.relayClient.encodeEnvelope(envelope),
-                masterKey = chain.masterKeyBytes,
-                chainId = chain.chainId
-            )
-        }.getOrElse { err ->
-            return OtpSyncOutcome.RelayFailed(err.localizedMessage ?: "Encryption failed")
+        if (matchingChains.isEmpty()) {
+            return OtpSyncOutcome.FilteredByCustomRule(extracted.code, extracted.serviceName)
         }
 
-        val publishResult = app.relayClient.publishCiphertext(
-            relayBaseUrl = settings.relayBaseUrl,
-            blindedTopic = chain.blindedTopic,
-            ciphertextToken = encrypted
-        )
-
-        if (publishResult.isFailure) {
-            if (deduplicate) {
-                recentSyncedCodes.remove(extracted.code)
-            }
-            return OtpSyncOutcome.RelayFailed(
-                publishResult.exceptionOrNull()?.localizedMessage ?: "Check network"
-            )
-        }
+        val now = System.currentTimeMillis()
+        val syncedNames = mutableListOf<String>()
+        var duplicateCount = 0
+        var lastError: String? = null
 
         val expiresAt = if (settings.retentionHours <= 0) {
             Long.MAX_VALUE
@@ -114,20 +97,82 @@ object OtpSyncCoordinator {
             now + settings.retentionHours * 3_600_000L
         }
 
-        app.otpRepository.insertIfNew(
-            SyncedOtpEntity(
-                messageUuid = msgUuid,
-                serviceName = extracted.serviceName,
-                otpCode = extracted.code,
-                rawSnippet = extracted.snippet,
-                direction = OtpDirection.OUTBOUND.name,
-                peerDeviceName = chain.peerDeviceName,
-                timestamp = now,
-                expiresAt = expiresAt,
-                isCopied = false
-            )
-        )
+        for (chain in matchingChains) {
+            val dedupKey = "${chain.chainId}:${extracted.code}"
+            if (deduplicate) {
+                val previous = recentSyncedCodes[dedupKey]
+                if (previous != null && (now - previous) < DEDUP_WINDOW_MS) {
+                    duplicateCount++
+                    continue
+                }
+                recentSyncedCodes[dedupKey] = now
+            }
 
-        return OtpSyncOutcome.Synced(extracted.code, extracted.serviceName)
+            val msgUuid = UUID.randomUUID().toString()
+            val envelope = RelayEnvelope(
+                messageUuid = msgUuid,
+                type = "OTP",
+                senderDeviceId = deviceId,
+                senderDeviceName = settings.localDeviceName,
+                otpCode = extracted.code,
+                serviceName = extracted.serviceName,
+                snippet = extracted.snippet,
+                sentAtEpochMs = now
+            )
+
+            val encrypted = runCatching {
+                E2eeCryptoManager.encrypt(
+                    plaintext = app.relayClient.encodeEnvelope(envelope),
+                    masterKey = chain.masterKeyBytes,
+                    chainId = chain.chainId
+                )
+            }.getOrElse { err ->
+                if (deduplicate) recentSyncedCodes.remove(dedupKey)
+                lastError = err.localizedMessage ?: "Encryption failed"
+                continue
+            }
+
+            val publishResult = app.relayClient.publishCiphertext(
+                relayBaseUrl = chain.relayBaseUrl,
+                blindedTopic = chain.blindedTopic,
+                ciphertextToken = encrypted
+            )
+
+            if (publishResult.isFailure) {
+                if (deduplicate) recentSyncedCodes.remove(dedupKey)
+                lastError = publishResult.exceptionOrNull()?.localizedMessage ?: "Check network"
+                continue
+            }
+
+            app.otpRepository.insertIfNew(
+                SyncedOtpEntity(
+                    messageUuid = msgUuid,
+                    serviceName = extracted.serviceName,
+                    otpCode = extracted.code,
+                    rawSnippet = extracted.snippet,
+                    direction = OtpDirection.OUTBOUND.name,
+                    peerDeviceName = chain.displayTitle,
+                    timestamp = now,
+                    expiresAt = expiresAt,
+                    isCopied = false,
+                    chainId = chain.chainId
+                )
+            )
+            syncedNames.add(chain.displayTitle)
+        }
+
+        if (recentSyncedCodes.size > 64) {
+            recentSyncedCodes.entries.removeIf { (_, ts) -> (now - ts) > 120_000L }
+        }
+
+        return when {
+            syncedNames.isNotEmpty() -> OtpSyncOutcome.Synced(
+                code = extracted.code,
+                serviceName = extracted.serviceName,
+                syncedChainNames = syncedNames
+            )
+            duplicateCount == matchingChains.size -> OtpSyncOutcome.DuplicateSkipped
+            else -> OtpSyncOutcome.RelayFailed(lastError ?: "Check network")
+        }
     }
 }

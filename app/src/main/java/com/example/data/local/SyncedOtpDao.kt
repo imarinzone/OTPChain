@@ -29,6 +29,9 @@ interface SyncedOtpDao {
     @Query("DELETE FROM synced_otps WHERE expiresAt < :nowEpochMs")
     suspend fun purgeExpired(nowEpochMs: Long)
 
+    @Query("DELETE FROM synced_otps WHERE chainId = :chainId")
+    suspend fun deleteByChainId(chainId: String)
+
     @Query("DELETE FROM synced_otps")
     suspend fun clearAll()
 }

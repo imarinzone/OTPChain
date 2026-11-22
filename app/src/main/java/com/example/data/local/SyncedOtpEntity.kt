@@ -19,5 +19,6 @@ data class SyncedOtpEntity(
     val peerDeviceName: String,
     val timestamp: Long,
     val expiresAt: Long, // Long.MAX_VALUE if manual retention
-    val isCopied: Boolean = false
+    val isCopied: Boolean = false,
+    val chainId: String = ""
 )

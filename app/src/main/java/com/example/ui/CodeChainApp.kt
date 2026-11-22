@@ -13,10 +13,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Settings
@@ -61,8 +59,10 @@ import com.example.R
 import com.example.otp.NotificationAccessHelper
 import com.example.qr.QrScannerSheet
 import com.example.tile.SyncQuickTileService
+import com.example.ui.components.AddSyncModalSheet
+import com.example.ui.components.ChainRulesModalSheet
+import com.example.ui.components.ChainSettingsModalSheet
 import com.example.ui.components.PasteOtpModalSheet
-import com.example.ui.screens.ChainScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.VaultScreen
 import kotlinx.coroutines.launch
@@ -80,13 +80,6 @@ sealed class CodeChainRoute(
         unselectedIcon = Icons.Outlined.Lock
     )
 
-    data object Chain : CodeChainRoute(
-        route = "chain",
-        labelRes = R.string.nav_chain,
-        selectedIcon = Icons.Rounded.Link,
-        unselectedIcon = Icons.Outlined.Link
-    )
-
     data object Settings : CodeChainRoute(
         route = "settings",
         labelRes = R.string.nav_settings,
@@ -97,7 +90,6 @@ sealed class CodeChainRoute(
 
 private val topLevelRoutes = listOf(
     CodeChainRoute.Vault,
-    CodeChainRoute.Chain,
     CodeChainRoute.Settings
 )
 
@@ -115,6 +107,11 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
     val coroutineScope = rememberCoroutineScope()
 
     var showQrScanner by remember { mutableStateOf(false) }
+    var pendingQrLabel by remember { mutableStateOf<String?>(null) }
+    var showAddSyncSheet by remember { mutableStateOf(false) }
+    var chainSettingsTarget by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+    var rulesEditorChainId by remember { mutableStateOf<String?>(null) }
+    var pasteOtpChainId by remember { mutableStateOf<String?>(null) }
     var showPasteOtpSheet by remember { mutableStateOf(false) }
     var pasteInitialText by remember { mutableStateOf("") }
 
@@ -164,6 +161,9 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
 
     val openNotificationAccessSettings = {
         context.startActivity(NotificationAccessHelper.createNotificationListenerSettingsIntent(context))
+    }
+    val openAppInfoSettings = {
+        context.startActivity(NotificationAccessHelper.createAppInfoIntent(context))
     }
 
     val smsPermLauncher = rememberLauncherForActivityResult(
@@ -221,11 +221,12 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
         }
     }
 
-    // Automatically open Extract & Sync modal when user shares an SMS into CodeChain
+    // Automatically open Extract & Sync modal when user shares an SMS into OTP Chain
     LaunchedEffect(pendingSharedSms) {
         val shared = pendingSharedSms
         if (!shared.isNullOrBlank()) {
             pasteInitialText = shared
+            pasteOtpChainId = uiState.selectedChain?.chainId
             showPasteOtpSheet = true
             viewModel.clearPendingSharedSms()
         }
@@ -321,33 +322,29 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
                                         notificationPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                     }
                                 },
-                                onToggleSync = viewModel::setSyncEnabled,
-                                onOpenChainTab = { navigateToTab(CodeChainRoute.Chain.route) },
-                                onOpenQrScanner = { showQrScanner = true },
-                                onStartNewChain = viewModel::startNewChain,
-                                onOpenPasteOtp = {
+                                onSelectChain = viewModel::selectChain,
+                                onToggleChainSync = viewModel::setChainSyncEnabled,
+                                onToggleChainRulesEnabled = viewModel::setCustomRulesEnabled,
+                                onOpenChainSettings = { chainId, expandQr ->
+                                    chainSettingsTarget = chainId to expandQr
+                                },
+                                onOpenChainRulesEditor = { chainId -> rulesEditorChainId = chainId },
+                                onOpenAddSyncSheet = { showAddSyncSheet = true },
+                                onOpenQrScanner = {
+                                    pendingQrLabel = null
+                                    showQrScanner = true
+                                },
+                                onStartNewChain = {
+                                    val newId = viewModel.startNewChain()
+                                    chainSettingsTarget = newId to true
+                                },
+                                onOpenPasteOtp = { chainId ->
                                     pasteInitialText = ""
+                                    pasteOtpChainId = chainId
                                     showPasteOtpSheet = true
                                 },
                                 onCopyOtp = viewModel::copyOtp,
                                 onDeleteOtp = viewModel::deleteOtp
-                            )
-                        }
-
-                        composable(CodeChainRoute.Chain.route) {
-                            ChainScreen(
-                                uiState = uiState,
-                                pairingUri = viewModel.buildCurrentPairingUri(),
-                                onStartNewChain = viewModel::startNewChain,
-                                onOpenQrScanner = { showQrScanner = true },
-                                onToggleMasterSync = viewModel::setSyncEnabled,
-                                onToggleSendOutbound = viewModel::setSendOutboundEnabled,
-                                onToggleReceiveInbound = viewModel::setReceiveInboundEnabled,
-                                onSendTestPing = viewModel::sendEncryptedPing,
-                                onSeverChain = viewModel::severChain,
-                                onShowMessage = { msg ->
-                                    coroutineScope.launch { snackbarHostState.showSnackbar(msg) }
-                                }
                             )
                         }
 
@@ -360,6 +357,7 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
                                     smsPermLauncher.launch(Manifest.permission.RECEIVE_SMS)
                                 },
                                 onOpenNotificationAccess = openNotificationAccessSettings,
+                                onOpenAppInfo = openAppInfoSettings,
                                 onAddQuickTile = {
                                     SyncQuickTileService.requestAddTile(context) { message ->
                                         coroutineScope.launch {
@@ -367,9 +365,11 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
                                         }
                                     }
                                 },
-                                onAddCustomRule = viewModel::addCustomRule,
-                                onRemoveCustomRule = viewModel::removeCustomRule,
-                                onToggleCustomRulesEnabled = viewModel::setCustomRulesEnabled,
+                                onToggleGlobalSync = viewModel::setGlobalSyncEnabled,
+                                onOpenChainSettings = { chainId ->
+                                    chainSettingsTarget = chainId to false
+                                },
+                                onOpenAddSyncSheet = { showAddSyncSheet = true },
                                 onUpdateDeviceName = viewModel::setLocalDeviceName,
                                 onUpdateRelayUrl = viewModel::setRelayBaseUrl,
                                 onUpdateRetentionHours = viewModel::setRetentionHours,
@@ -383,26 +383,97 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
         }
     }
 
+    if (showAddSyncSheet) {
+        AddSyncModalSheet(
+            existingCount = uiState.chains.size,
+            onStartNewChain = { label ->
+                val newId = viewModel.startNewChain(label)
+                navigateToTab(CodeChainRoute.Vault.route)
+                chainSettingsTarget = newId to true
+            },
+            onScanQrToJoin = { label ->
+                pendingQrLabel = label
+                showQrScanner = true
+            },
+            onDismiss = { showAddSyncSheet = false }
+        )
+    }
+
+    // Per-Chain Settings & QR Modal Sheet (opened from each card's top settings button)
+    val settingsChain = chainSettingsTarget?.let { (id, expandQr) ->
+        uiState.chains.firstOrNull { it.chainId == id }?.let { it to expandQr }
+    }
+    if (settingsChain != null) {
+        val (chain, expandQr) = settingsChain
+        ChainSettingsModalSheet(
+            chain = chain,
+            localDeviceName = uiState.settings?.localDeviceName ?: "Android",
+            pairingUri = viewModel.buildPairingUri(chain.chainId),
+            isSending = uiState.isSending,
+            initiallyExpandQr = expandQr,
+            onRenameChain = { newName -> viewModel.renameChain(chain.chainId, newName) },
+            onToggleChainSync = { enabled -> viewModel.setChainSyncEnabled(chain.chainId, enabled) },
+            onToggleSendOutbound = { enabled -> viewModel.setChainSendOutboundEnabled(chain.chainId, enabled) },
+            onToggleReceiveInbound = { enabled -> viewModel.setChainReceiveInboundEnabled(chain.chainId, enabled) },
+            onToggleRulesEnabled = { enabled -> viewModel.setCustomRulesEnabled(chain.chainId, enabled) },
+            onAddCustomRule = { rule -> viewModel.addCustomRule(chain.chainId, rule) },
+            onRemoveCustomRule = { rule -> viewModel.removeCustomRule(chain.chainId, rule) },
+            onSendTestPing = { viewModel.sendEncryptedPing(chain.chainId) },
+            onSeverChain = { clearHistory -> viewModel.severChain(chain.chainId, clearHistory) },
+            onShowMessage = { msg ->
+                coroutineScope.launch { snackbarHostState.showSnackbar(msg) }
+            },
+            onDismiss = { chainSettingsTarget = null }
+        )
+    }
+
+    val editingChain = rulesEditorChainId?.let { id ->
+        uiState.chains.firstOrNull { it.chainId == id }
+    }
+    if (editingChain != null) {
+        ChainRulesModalSheet(
+            chain = editingChain,
+            onAddRule = { rule -> viewModel.addCustomRule(editingChain.chainId, rule) },
+            onRemoveRule = { rule -> viewModel.removeCustomRule(editingChain.chainId, rule) },
+            onToggleRulesEnabled = { enabled ->
+                viewModel.setCustomRulesEnabled(editingChain.chainId, enabled)
+            },
+            onDismiss = { rulesEditorChainId = null }
+        )
+    }
+
     if (showQrScanner) {
         QrScannerSheet(
             onQrScanned = { rawQr ->
-                if (viewModel.joinChainFromQr(rawQr)) {
+                if (viewModel.joinChainFromQr(rawQr, pendingQrLabel)) {
+                    pendingQrLabel = null
                     showQrScanner = false
-                    navigateToTab(CodeChainRoute.Chain.route)
+                    navigateToTab(CodeChainRoute.Vault.route)
                 }
             },
-            onDismiss = { showQrScanner = false }
+            onDismiss = {
+                pendingQrLabel = null
+                showQrScanner = false
+            }
         )
     }
 
     if (showPasteOtpSheet) {
+        val targetChain = pasteOtpChainId?.let { id ->
+            uiState.chains.firstOrNull { it.chainId == id }
+        } ?: uiState.selectedChain
         PasteOtpModalSheet(
             initialText = pasteInitialText,
             isSending = uiState.isSending,
-            customRulesEnabled = uiState.settings?.customRulesEnabled ?: true,
-            customFilterRules = uiState.settings?.customFilterRules ?: emptyList(),
+            targetSyncName = targetChain?.displayTitle,
+            customRulesEnabled = targetChain?.customRulesEnabled ?: true,
+            customFilterRules = targetChain?.customFilterRules ?: emptyList(),
             onSyncOtp = { rawText, senderHint ->
-                viewModel.extractAndSyncOtp(rawText, senderHint)
+                viewModel.extractAndSyncOtp(
+                    rawText = rawText,
+                    senderHint = senderHint,
+                    targetChainId = targetChain?.chainId
+                )
                 showPasteOtpSheet = false
             },
             onDismiss = { showPasteOtpSheet = false }
@@ -432,9 +503,7 @@ fun CodeChainApp(viewModel: SyncChainViewModel) {
             },
             dismissButton = {
                 TextButton(
-                    onClick = {
-                        context.startActivity(NotificationAccessHelper.createAppInfoIntent(context))
-                    },
+                    onClick = { openAppInfoSettings() },
                     modifier = Modifier.testTag("dialog_app_info_button")
                 ) {
                     Text("App Info")

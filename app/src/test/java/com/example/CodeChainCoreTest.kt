@@ -1,8 +1,13 @@
 package com.example
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
+import com.example.data.prefs.ChainPreferencesRepository
 import com.example.otp.OtpParser
 import com.example.security.E2eeCryptoManager
 import com.example.security.PairingPayload
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
@@ -62,6 +67,7 @@ class CodeChainCoreTest {
             relayBaseUrl = "https://ntfy.sh"
         )
         val uri = original.toUriString()
+        assertTrue(uri.startsWith("otpchain://pair?"))
         val parsed = PairingPayload.parse(uri).getOrThrow()
 
         assertEquals(original.chainId, parsed.chainId)
@@ -108,5 +114,51 @@ class CodeChainCoreTest {
         val otherBankText = "AcmeBank: Your verification code is 112233."
         val otherOtp = OtpParser.extractOtp(otherBankText)!!
         assertNull(OtpParser.findMatchingCustomRule(otherBankText, otherOtp, rules))
+    }
+
+    @Test
+    fun `multiple sync chains store independent rules and toggles`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val repo = ChainPreferencesRepository(context)
+
+        val key1 = E2eeCryptoManager.encodeBase64Url(E2eeCryptoManager.generateMasterKey())
+        val key2 = E2eeCryptoManager.encodeBase64Url(E2eeCryptoManager.generateMasterKey())
+
+        repo.addOrUpdateChain(
+            chainId = "chain_work",
+            masterKeyBase64 = key1,
+            peerDeviceName = "Work Mac",
+            isPeerConfirmed = true,
+            label = "Work"
+        )
+        repo.addOrUpdateChain(
+            chainId = "chain_bank",
+            masterKeyBase64 = key2,
+            peerDeviceName = "Backup Phone",
+            isPeerConfirmed = true,
+            label = "Banking"
+        )
+
+        repo.addCustomFilterRule("chain_work", "GitHub")
+        repo.addCustomFilterRule("chain_work", "Okta")
+        repo.addCustomFilterRule("chain_bank", "Chase")
+
+        val state = repo.state.first()
+        assertEquals(2, state.chains.size)
+
+        val work = state.chains.first { it.chainId == "chain_work" }
+        val bank = state.chains.first { it.chainId == "chain_bank" }
+        assertEquals(listOf("GitHub", "Okta"), work.customFilterRules)
+        assertEquals(listOf("Chase"), bank.customFilterRules)
+
+        // Switching selected chain preserves both chains
+        repo.selectChain("chain_work")
+        assertEquals("chain_work", repo.state.first().selectedChainId)
+
+        // Removing one chain keeps the other intact
+        repo.removeChain("chain_work")
+        val afterRemove = repo.state.first()
+        assertEquals(1, afterRemove.chains.size)
+        assertEquals("chain_bank", afterRemove.chains.first().chainId)
     }
 }

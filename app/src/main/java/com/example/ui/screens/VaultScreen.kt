@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -14,14 +15,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AddLink
 import androidx.compose.material.icons.rounded.EnhancedEncryption
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.QrCodeScanner
-import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -29,21 +32,32 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.util.lerp
 import com.example.R
 import com.example.data.local.SyncedOtpEntity
+import com.example.data.prefs.ActiveChain
+import com.example.data.relay.RelayConnectionState
 import com.example.ui.CodeChainUiState
+import com.example.ui.components.ChainRulesStripCard
 import com.example.ui.components.LatestOtpHeroCard
 import com.example.ui.components.NotificationAccessBanner
 import com.example.ui.components.NotificationPermissionBanner
 import com.example.ui.components.OtpHistoryRowCard
 import com.example.ui.components.SmsPermissionBanner
+import com.example.ui.components.SyncPagerIndicatorRow
 import com.example.ui.components.SyncStatusHeroCard
+import kotlinx.coroutines.launch
+import kotlin.math.absoluteValue
 
 @Composable
 fun VaultScreen(
@@ -54,141 +68,302 @@ fun VaultScreen(
     onRequestSmsPermission: () -> Unit,
     onRequestNotificationAccess: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
-    onToggleSync: (Boolean) -> Unit,
-    onOpenChainTab: () -> Unit,
+    onSelectChain: (String) -> Unit,
+    onToggleChainSync: (chainId: String, enabled: Boolean) -> Unit,
+    onToggleChainRulesEnabled: (chainId: String, enabled: Boolean) -> Unit,
+    onOpenChainSettings: (chainId: String, expandQr: Boolean) -> Unit,
+    onOpenChainRulesEditor: (chainId: String) -> Unit,
+    onOpenAddSyncSheet: () -> Unit,
     onOpenQrScanner: () -> Unit,
     onStartNewChain: () -> Unit,
-    onOpenPasteOtp: () -> Unit,
+    onOpenPasteOtp: (chainId: String) -> Unit,
     onCopyOtp: (SyncedOtpEntity) -> Unit,
     onDeleteOtp: (Long) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val settings = uiState.settings
-    val activeChain = settings?.activeChain
-    val latestOtp = uiState.otps.firstOrNull()
-    val historyOtps = if (uiState.otps.size > 1) uiState.otps.drop(1) else emptyList()
+    val chains = uiState.chains
+    val isGlobalSyncEnabled = settings?.isSyncEnabled ?: true
+    val coroutineScope = rememberCoroutineScope()
 
-    LazyColumn(
+    val selectedIndex = remember(chains, settings?.selectedChainId) {
+        val idx = chains.indexOfFirst { it.chainId == settings?.selectedChainId }
+        if (idx >= 0) idx else 0
+    }
+
+    val pagerState = rememberPagerState(
+        initialPage = selectedIndex,
+        pageCount = { chains.size.coerceAtLeast(1) }
+    )
+
+    LaunchedEffect(selectedIndex, chains.size) {
+        if (chains.isNotEmpty() && selectedIndex in chains.indices && pagerState.currentPage != selectedIndex) {
+            pagerState.animateScrollToPage(selectedIndex)
+        }
+    }
+
+    LaunchedEffect(pagerState.settledPage, chains) {
+        val swipedChain = chains.getOrNull(pagerState.settledPage)
+        if (swipedChain != null && swipedChain.chainId != settings?.selectedChainId) {
+            onSelectChain(swipedChain.chainId)
+        }
+    }
+
+    Column(
         modifier = modifier
             .fillMaxSize()
-            .widthIn(max = 680.dp),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+            .widthIn(max = 680.dp)
     ) {
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        // Compact Top Header
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(top = 14.dp, bottom = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
                 Text(
                     text = stringResource(R.string.app_name),
-                    style = MaterialTheme.typography.displaySmall,
+                    style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "Zero-storage end-to-end encrypted 2FA vault",
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = when {
+                        chains.size > 1 -> "${chains.size} chains · Swipe left or right"
+                        chains.size == 1 -> "Zero-storage encrypted 2FA vault"
+                        else -> "End-to-end encrypted OTP sync"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-        }
 
-        item {
-            val activeRuleCount = if (settings?.customRulesEnabled == true) {
-                settings.customFilterRules.size
-            } else {
-                0
-            }
-            SyncStatusHeroCard(
-                activeChain = activeChain,
-                isSyncEnabled = settings?.isSyncEnabled ?: true,
-                hasAutoSms = hasReceiveSms || hasNotificationAccess,
-                activeCustomRuleCount = activeRuleCount,
-                relayState = uiState.relayState,
-                onToggleSync = onToggleSync,
-                onOpenChainSetup = onOpenChainTab
-            )
-        }
-
-        if (!hasReceiveSms) {
-            item {
-                SmsPermissionBanner(
-                    onRequestSmsPermission = onRequestSmsPermission
+            FilledTonalButton(
+                onClick = onOpenAddSyncSheet,
+                shape = CircleShape,
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                modifier = Modifier.testTag("home_add_sync_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Add,
+                    contentDescription = "Add sync chain",
+                    modifier = Modifier.size(18.dp)
                 )
+                Spacer(Modifier.width(4.dp))
+                Text("Add")
             }
         }
 
-        if (!hasNotificationAccess) {
-            item {
-                NotificationAccessBanner(
-                    onOpenSettings = onRequestNotificationAccess
-                )
-            }
-        }
+        if (chains.isEmpty()) {
+            // Unpaired Onboarding State
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                item {
+                    SyncStatusHeroCard(
+                        activeChain = null,
+                        isGlobalSyncEnabled = isGlobalSyncEnabled,
+                        isChainSyncEnabled = true,
+                        hasAutoSms = hasReceiveSms || hasNotificationAccess,
+                        activeCustomRuleCount = 0,
+                        relayState = RelayConnectionState.Unpaired,
+                        onToggleSync = {},
+                        onOpenChainSettings = onOpenAddSyncSheet
+                    )
+                }
 
-        if (needsNotificationPermission) {
-            item {
-                NotificationPermissionBanner(
-                    onRequestPermission = onRequestNotificationPermission
-                )
-            }
-        }
+                if (!hasReceiveSms) {
+                    item { SmsPermissionBanner(onRequestSmsPermission = onRequestSmsPermission) }
+                }
+                if (!hasNotificationAccess) {
+                    item { NotificationAccessBanner(onOpenSettings = onRequestNotificationAccess) }
+                }
+                if (needsNotificationPermission) {
+                    item { NotificationPermissionBanner(onRequestPermission = onRequestNotificationPermission) }
+                }
 
-        if (activeChain == null) {
-            item {
-                OnboardingChainCard(
-                    onStartNewChain = {
-                        onStartNewChain()
-                        onOpenChainTab()
-                    },
-                    onScanQr = onOpenQrScanner
-                )
+                item {
+                    OnboardingChainCard(
+                        onStartNewChain = onStartNewChain,
+                        onScanQr = onOpenQrScanner
+                    )
+                }
             }
         } else {
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+            // Animated Pager Dots when 2+ chains exist
+            if (chains.size > 1) {
+                SyncPagerIndicatorRow(
+                    pageCount = chains.size,
+                    currentPage = pagerState.currentPage.coerceIn(0, chains.lastIndex),
+                    onSelectPage = { targetPage ->
+                        coroutineScope.launch {
+                            pagerState.animateScrollToPage(targetPage)
+                        }
+                    },
+                    modifier = Modifier
+                        .padding(horizontal = 22.dp)
+                        .padding(bottom = 8.dp)
+                )
+            }
+
+            // Full-Page Tinder-Style Swipeable Chain Deck
+            HorizontalPager(
+                state = pagerState,
+                contentPadding = PaddingValues(
+                    horizontal = if (chains.size > 1) 16.dp else 14.dp
+                ),
+                pageSpacing = 12.dp,
+                beyondViewportPageCount = 1,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .testTag("home_sync_pager")
+            ) { page ->
+                val chain = chains[page]
+                val isFirstChain = page == 0
+                val pageOffset = pagerState.getOffsetDistanceInPages(page)
+                val absOffset = pageOffset.absoluteValue.coerceIn(0f, 1f)
+
+                val chainOtps = remember(uiState.otps, chain.chainId, isFirstChain) {
+                    uiState.otps.filter { otp ->
+                        otp.chainId == chain.chainId || (isFirstChain && otp.chainId.isBlank())
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(32.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                    tonalElevation = 1.dp,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(bottom = 12.dp)
+                        .graphicsLayer {
+                            // Tinder-style card deck physics as user swipes left/right
+                            rotationZ = pageOffset * -4.2f
+                            val scale = lerp(0.93f, 1f, 1f - absOffset)
+                            scaleX = scale
+                            scaleY = scale
+                            alpha = lerp(0.76f, 1f, 1f - absOffset)
+                            translationY = absOffset * 18f
+                        }
+                        .testTag("chain_deck_page_${chain.chainId}")
                 ) {
-                    Button(
-                        onClick = onOpenPasteOtp,
-                        shape = CircleShape,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(52.dp)
-                            .testTag("open_paste_otp_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Share,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text("Extract & Sync OTP")
-                    }
-                    FilledTonalButton(
-                        onClick = onOpenChainTab,
-                        shape = CircleShape,
-                        modifier = Modifier
-                            .height(52.dp)
-                            .testTag("view_chain_controls_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.QrCode2,
-                            contentDescription = "Manage Chain",
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                    ChainDeckPageContent(
+                        chain = chain,
+                        otps = chainOtps,
+                        isGlobalSyncEnabled = isGlobalSyncEnabled,
+                        hasAutoSms = hasReceiveSms || hasNotificationAccess,
+                        hasReceiveSms = hasReceiveSms,
+                        hasNotificationAccess = hasNotificationAccess,
+                        needsNotificationPermission = needsNotificationPermission,
+                        relayState = uiState.relayStateFor(chain.chainId),
+                        onToggleChainSync = { enabled -> onToggleChainSync(chain.chainId, enabled) },
+                        onOpenChainSettings = { expandQr -> onOpenChainSettings(chain.chainId, expandQr) },
+                        onToggleRulesEnabled = { enabled -> onToggleChainRulesEnabled(chain.chainId, enabled) },
+                        onOpenRulesEditor = { onOpenChainRulesEditor(chain.chainId) },
+                        onOpenPasteOtp = { onOpenPasteOtp(chain.chainId) },
+                        onRequestSmsPermission = onRequestSmsPermission,
+                        onRequestNotificationAccess = onRequestNotificationAccess,
+                        onRequestNotificationPermission = onRequestNotificationPermission,
+                        onCopyOtp = onCopyOtp,
+                        onDeleteOtp = onDeleteOtp
+                    )
                 }
             }
         }
+    }
+}
 
+@Composable
+private fun ChainDeckPageContent(
+    chain: ActiveChain,
+    otps: List<SyncedOtpEntity>,
+    isGlobalSyncEnabled: Boolean,
+    hasAutoSms: Boolean,
+    hasReceiveSms: Boolean,
+    hasNotificationAccess: Boolean,
+    needsNotificationPermission: Boolean,
+    relayState: RelayConnectionState,
+    onToggleChainSync: (Boolean) -> Unit,
+    onOpenChainSettings: (expandQr: Boolean) -> Unit,
+    onToggleRulesEnabled: (Boolean) -> Unit,
+    onOpenRulesEditor: () -> Unit,
+    onOpenPasteOtp: () -> Unit,
+    onRequestSmsPermission: () -> Unit,
+    onRequestNotificationAccess: () -> Unit,
+    onRequestNotificationPermission: () -> Unit,
+    onCopyOtp: (SyncedOtpEntity) -> Unit,
+    onDeleteOtp: (Long) -> Unit
+) {
+    val latestOtp = otps.firstOrNull()
+    val historyOtps = if (otps.size > 1) otps.drop(1) else emptyList()
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(14.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        // 1. Chain Hero Card with Top Settings Button + QR + Extract & Sync
+        item(key = "hero_${chain.chainId}") {
+            SyncStatusHeroCard(
+                activeChain = chain,
+                isGlobalSyncEnabled = isGlobalSyncEnabled,
+                isChainSyncEnabled = chain.isSyncEnabled,
+                hasAutoSms = hasAutoSms,
+                activeCustomRuleCount = chain.activeCustomRuleCount,
+                relayState = relayState,
+                onToggleSync = onToggleChainSync,
+                onOpenChainSettings = { onOpenChainSettings(false) },
+                onOpenChainQr = { onOpenChainSettings(true) },
+                onOpenExtractOtp = onOpenPasteOtp,
+                onOpenRules = onOpenRulesEditor
+            )
+        }
+
+        // 2. Chain-Specific Filter Rules right inside this page
+        item(key = "rules_${chain.chainId}") {
+            ChainRulesStripCard(
+                chain = chain,
+                onToggleRulesEnabled = onToggleRulesEnabled,
+                onOpenRulesEditor = onOpenRulesEditor
+            )
+        }
+
+        // 3. Compact permission reminders only when missing
+        if (!hasReceiveSms) {
+            item(key = "perm_sms") {
+                SmsPermissionBanner(onRequestSmsPermission = onRequestSmsPermission)
+            }
+        }
+        if (!hasNotificationAccess) {
+            item(key = "perm_notif_access") {
+                NotificationAccessBanner(onOpenSettings = onRequestNotificationAccess)
+            }
+        }
+        if (needsNotificationPermission) {
+            item(key = "perm_post_notif") {
+                NotificationPermissionBanner(onRequestPermission = onRequestNotificationPermission)
+            }
+        }
+
+        // 4. This Chain's Synced OTP Vault
         if (latestOtp != null) {
-            item {
+            item(key = "latest_header") {
                 Text(
-                    text = "LATEST CODE",
+                    text = "LATEST CODE · ${chain.displayTitle.uppercase()}",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 4.dp)
                 )
             }
-            item {
+            item(key = "latest_${latestOtp.id}") {
                 LatestOtpHeroCard(
                     otp = latestOtp,
                     onCopy = { onCopyOtp(latestOtp) }
@@ -197,12 +372,12 @@ fun VaultScreen(
         }
 
         if (historyOtps.isNotEmpty()) {
-            item {
+            item(key = "history_header") {
                 Text(
                     text = "RECENT HISTORY",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp)
+                    modifier = Modifier.padding(start = 4.dp, top = 4.dp)
                 )
             }
             items(historyOtps, key = { it.id }) { otp ->
@@ -212,9 +387,12 @@ fun VaultScreen(
                     onDelete = { onDeleteOtp(otp.id) }
                 )
             }
-        } else if (activeChain != null && latestOtp == null) {
-            item {
-                EmptyVaultPlaceholder(onOpenPasteOtp = onOpenPasteOtp)
+        } else if (latestOtp == null) {
+            item(key = "empty_${chain.chainId}") {
+                EmptyVaultPlaceholder(
+                    syncName = chain.displayTitle,
+                    onOpenPasteOtp = onOpenPasteOtp
+                )
             }
         }
     }
@@ -240,7 +418,7 @@ private fun OnboardingChainCard(
                 color = MaterialTheme.colorScheme.primaryContainer,
                 modifier = Modifier.size(56.dp)
             ) {
-                androidx.compose.foundation.layout.Box(contentAlignment = Alignment.Center) {
+                Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = Icons.Rounded.AddLink,
                         contentDescription = null,
@@ -294,14 +472,17 @@ private fun OnboardingChainCard(
 }
 
 @Composable
-private fun EmptyVaultPlaceholder(onOpenPasteOtp: () -> Unit) {
+private fun EmptyVaultPlaceholder(
+    syncName: String,
+    onOpenPasteOtp: () -> Unit
+) {
     Surface(
         shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
-            modifier = Modifier.padding(24.dp),
+            modifier = Modifier.padding(22.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -309,15 +490,15 @@ private fun EmptyVaultPlaceholder(onOpenPasteOtp: () -> Unit) {
                 imageVector = Icons.Rounded.EnhancedEncryption,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(34.dp)
             )
             Text(
-                text = "Vault Ready for Encrypted OTPs",
+                text = "Ready for $syncName OTPs",
                 style = MaterialTheme.typography.titleMedium,
                 textAlign = TextAlign.Center
             )
             Text(
-                text = "Share any verification SMS to OTP Chain from your messaging app, or tap Extract & Sync OTP above to forward a code.",
+                text = "Incoming verification codes matching $syncName's rules will appear here automatically, or tap Extract & Sync above.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center

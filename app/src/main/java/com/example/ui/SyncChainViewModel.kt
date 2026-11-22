@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.CodeChainApplication
 import com.example.data.local.SyncedOtpEntity
+import com.example.data.prefs.ActiveChain
 import com.example.data.prefs.ChainSettingsState
 import com.example.data.relay.RelayConnectionState
 import com.example.data.relay.RelayEnvelope
@@ -28,9 +29,20 @@ import java.util.UUID
 data class CodeChainUiState(
     val settings: ChainSettingsState? = null,
     val otps: List<SyncedOtpEntity> = emptyList(),
-    val relayState: RelayConnectionState = RelayConnectionState.Unpaired,
+    val chainRelayStates: Map<String, RelayConnectionState> = emptyMap(),
     val isSending: Boolean = false
-)
+) {
+    val chains: List<ActiveChain>
+        get() = settings?.chains.orEmpty()
+
+    val selectedChain: ActiveChain?
+        get() = settings?.activeChain
+
+    fun relayStateFor(chainId: String?): RelayConnectionState {
+        if (chainId == null) return RelayConnectionState.Unpaired
+        return chainRelayStates[chainId] ?: RelayConnectionState.Unpaired
+    }
+}
 
 class SyncChainViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as CodeChainApplication
@@ -48,13 +60,13 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
     val uiState: StateFlow<CodeChainUiState> = combine(
         prefsRepo.state,
         otpRepo.allOtps,
-        relayClient.connectionState,
+        relayClient.chainStates,
         _isSending
-    ) { settings, otps, relayState, isSending ->
+    ) { settings, otps, relayStates, isSending ->
         CodeChainUiState(
             settings = settings,
             otps = otps,
-            relayState = relayState,
+            chainRelayStates = relayStates,
             isSending = isSending
         )
     }.stateIn(
@@ -71,23 +83,28 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun startNewChain() {
+    fun startNewChain(customLabel: String? = null): String {
+        val chainId = UUID.randomUUID().toString().replace("-", "").take(16)
         viewModelScope.launch {
             prefsRepo.ensureDeviceIdInitialized()
             val masterKey = E2eeCryptoManager.generateMasterKey()
             val keyB64 = E2eeCryptoManager.encodeBase64Url(masterKey)
-            val chainId = UUID.randomUUID().toString().replace("-", "").take(16)
-            prefsRepo.saveNewChain(
+            val existingCount = uiState.value.chains.size
+            val resolvedLabel = customLabel?.trim()?.takeIf { it.isNotEmpty() }
+                ?: "Sync #${existingCount + 1}"
+            prefsRepo.addOrUpdateChain(
                 chainId = chainId,
                 masterKeyBase64 = keyB64,
                 peerDeviceName = "Waiting for partner scan...",
-                isPeerConfirmed = false
+                isPeerConfirmed = false,
+                label = resolvedLabel
             )
-            _events.tryEmit("New 256-bit E2EE sync chain created")
+            _events.tryEmit("Created \"$resolvedLabel\" (256-bit E2EE)")
         }
+        return chainId
     }
 
-    fun joinChainFromQr(rawQrText: String): Boolean {
+    fun joinChainFromQr(rawQrText: String, customLabel: String? = null): Boolean {
         val parsed = PairingPayload.parse(rawQrText)
         if (parsed.isFailure) {
             _events.tryEmit(parsed.exceptionOrNull()?.message ?: "Invalid OTP Chain QR code")
@@ -97,11 +114,13 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             val deviceId = prefsRepo.ensureDeviceIdInitialized()
             val settings = uiState.value.settings
-            prefsRepo.saveNewChain(
+            val label = customLabel?.trim()?.takeIf { it.isNotEmpty() } ?: payload.peerDeviceName
+            prefsRepo.addOrUpdateChain(
                 chainId = payload.chainId,
                 masterKeyBase64 = payload.masterKeyBase64,
                 peerDeviceName = payload.peerDeviceName,
                 isPeerConfirmed = true,
+                label = label,
                 relayBaseUrl = payload.relayBaseUrl
             )
             val keyBytes = E2eeCryptoManager.decodeBase64Url(payload.masterKeyBase64)
@@ -119,19 +138,40 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
                 payload.chainId
             )
             relayClient.publishCiphertext(payload.relayBaseUrl, topic, encrypted)
-            _events.tryEmit("Joined E2EE chain with ${payload.peerDeviceName}")
+            _events.tryEmit("Joined E2EE sync \"$label\"")
         }
         return true
     }
 
-    fun buildCurrentPairingUri(): String? {
+    fun selectChain(chainId: String) {
+        if (uiState.value.settings?.selectedChainId == chainId) return
+        viewModelScope.launch {
+            prefsRepo.selectChain(chainId)
+        }
+    }
+
+    fun renameChain(chainId: String, newLabel: String) {
+        val trimmed = newLabel.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch {
+            prefsRepo.renameChain(chainId, trimmed)
+            _events.tryEmit("Renamed sync to \"$trimmed\"")
+        }
+    }
+
+    fun buildPairingUri(chainId: String? = null): String? {
         val settings = uiState.value.settings ?: return null
-        val chain = settings.activeChain ?: return null
+        val chain = if (chainId != null) {
+            settings.chains.firstOrNull { it.chainId == chainId }
+        } else {
+            settings.activeChain
+        } ?: return null
+
         return PairingPayload(
             chainId = chain.chainId,
             masterKeyBase64 = chain.masterKeyBase64,
             peerDeviceName = settings.localDeviceName,
-            relayBaseUrl = settings.relayBaseUrl
+            relayBaseUrl = chain.relayBaseUrl
         ).toUriString()
     }
 
@@ -145,7 +185,11 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
         _pendingSharedSms.value = null
     }
 
-    fun extractAndSyncOtp(rawText: String, senderHint: String = "SMS Alert") {
+    fun extractAndSyncOtp(
+        rawText: String,
+        senderHint: String = "SMS Alert",
+        targetChainId: String? = null
+    ) {
         viewModelScope.launch {
             _isSending.value = true
             try {
@@ -154,19 +198,26 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
                         context = app,
                         rawText = rawText,
                         fallbackSender = senderHint,
-                        deduplicate = false
+                        deduplicate = false,
+                        targetChainId = targetChainId
                     )
                 ) {
-                    is OtpSyncOutcome.Synced ->
-                        _events.tryEmit("Encrypted & synced ${outcome.code} (${outcome.serviceName})")
+                    is OtpSyncOutcome.Synced -> {
+                        val dest = if (outcome.syncedChainNames.size == 1) {
+                            outcome.syncedChainNames.first()
+                        } else {
+                            "${outcome.syncedChainNames.size} syncs"
+                        }
+                        _events.tryEmit("Encrypted & synced ${outcome.code} to $dest")
+                    }
                     is OtpSyncOutcome.FilteredByCustomRule ->
-                        _events.tryEmit("Skipped ${outcome.code} — didn't match custom filter rules")
+                        _events.tryEmit("Skipped ${outcome.code} — didn't match filter rules")
                     OtpSyncOutcome.NoOtpFound ->
                         _events.tryEmit("No 4–8 digit 2FA code found in message")
                     OtpSyncOutcome.NoActiveChain ->
-                        _events.tryEmit("Pair a device on the Chain tab before syncing")
+                        _events.tryEmit("Add a sync on the Chain tab before syncing")
                     OtpSyncOutcome.OutboundPaused ->
-                        _events.tryEmit("Outbound sync is paused on this device")
+                        _events.tryEmit("Outbound sync is paused")
                     is OtpSyncOutcome.RelayFailed ->
                         _events.tryEmit("Relay send failed: ${outcome.reason}")
                     OtpSyncOutcome.DuplicateSkipped -> Unit
@@ -177,10 +228,15 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun sendEncryptedPing() {
+    fun sendEncryptedPing(chainId: String? = null) {
         viewModelScope.launch {
             val settings = uiState.value.settings ?: return@launch
-            val chain = settings.activeChain ?: return@launch
+            val chain = if (chainId != null) {
+                settings.chains.firstOrNull { it.chainId == chainId }
+            } else {
+                settings.activeChain
+            } ?: return@launch
+
             _isSending.value = true
             try {
                 val envelope = RelayEnvelope(
@@ -196,12 +252,12 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
                     chain.chainId
                 )
                 val result = relayClient.publishCiphertext(
-                    settings.relayBaseUrl,
+                    chain.relayBaseUrl,
                     chain.blindedTopic,
                     encrypted
                 )
                 if (result.isSuccess) {
-                    _events.tryEmit("Encrypted test ping sent over zero-cache relay")
+                    _events.tryEmit("Encrypted test ping sent to ${chain.displayTitle}")
                 } else {
                     _events.tryEmit("Ping failed: ${result.exceptionOrNull()?.localizedMessage}")
                 }
@@ -211,10 +267,10 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun severChain(clearHistory: Boolean) {
+    fun severChain(chainId: String, clearHistory: Boolean) {
         viewModelScope.launch {
             val settings = uiState.value.settings
-            val chain = settings?.activeChain
+            val chain = settings?.chains?.firstOrNull { it.chainId == chainId }
             if (settings != null && chain != null) {
                 runCatching {
                     val unpair = RelayEnvelope(
@@ -229,30 +285,38 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
                         chain.masterKeyBytes,
                         chain.chainId
                     )
-                    relayClient.publishCiphertext(settings.relayBaseUrl, chain.blindedTopic, encrypted)
+                    relayClient.publishCiphertext(chain.relayBaseUrl, chain.blindedTopic, encrypted)
                 }
             }
-            prefsRepo.clearChain()
+            prefsRepo.removeChain(chainId)
             if (clearHistory) {
-                otpRepo.clearAll()
+                otpRepo.deleteByChainId(chainId)
             }
-            _events.tryEmit("Sync chain severed and local keys wiped")
+            _events.tryEmit("Removed sync \"${chain?.displayTitle ?: "Chain"}\" and wiped its key")
         }
     }
 
-    fun setSyncEnabled(enabled: Boolean) {
+    fun setGlobalSyncEnabled(enabled: Boolean) {
         viewModelScope.launch {
-            prefsRepo.setSyncEnabled(enabled)
-            _events.tryEmit(if (enabled) "Sync resumed on this device" else "Sync paused on this device")
+            prefsRepo.setGlobalSyncEnabled(enabled)
+            _events.tryEmit(if (enabled) "All syncs resumed" else "All syncs paused on this device")
         }
     }
 
-    fun setSendOutboundEnabled(enabled: Boolean) {
-        viewModelScope.launch { prefsRepo.setSendOutboundEnabled(enabled) }
+    fun setChainSyncEnabled(chainId: String, enabled: Boolean) {
+        viewModelScope.launch {
+            val label = uiState.value.chains.firstOrNull { it.chainId == chainId }?.displayTitle ?: "Sync"
+            prefsRepo.setChainSyncEnabled(chainId, enabled)
+            _events.tryEmit(if (enabled) "$label resumed" else "$label paused")
+        }
     }
 
-    fun setReceiveInboundEnabled(enabled: Boolean) {
-        viewModelScope.launch { prefsRepo.setReceiveInboundEnabled(enabled) }
+    fun setChainSendOutboundEnabled(chainId: String, enabled: Boolean) {
+        viewModelScope.launch { prefsRepo.setChainSendOutboundEnabled(chainId, enabled) }
+    }
+
+    fun setChainReceiveInboundEnabled(chainId: String, enabled: Boolean) {
+        viewModelScope.launch { prefsRepo.setChainReceiveInboundEnabled(chainId, enabled) }
     }
 
     fun setLocalDeviceName(name: String) {
@@ -296,26 +360,26 @@ class SyncChainViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun addCustomRule(rule: String) {
+    fun addCustomRule(chainId: String, rule: String) {
         val trimmed = rule.trim()
         if (trimmed.isEmpty()) return
         viewModelScope.launch {
-            prefsRepo.addCustomFilterRule(trimmed)
-            _events.tryEmit("Added OTP filter rule \"$trimmed\"")
+            prefsRepo.addCustomFilterRule(chainId, trimmed)
+            _events.tryEmit("Added rule \"$trimmed\"")
         }
     }
 
-    fun removeCustomRule(rule: String) {
+    fun removeCustomRule(chainId: String, rule: String) {
         viewModelScope.launch {
-            prefsRepo.removeCustomFilterRule(rule)
+            prefsRepo.removeCustomFilterRule(chainId, rule)
         }
     }
 
-    fun setCustomRulesEnabled(enabled: Boolean) {
+    fun setCustomRulesEnabled(chainId: String, enabled: Boolean) {
         viewModelScope.launch {
-            prefsRepo.setCustomRulesEnabled(enabled)
+            prefsRepo.setCustomRulesEnabled(chainId, enabled)
             _events.tryEmit(
-                if (enabled) "Custom OTP rule filter enabled" else "Custom OTP rule filter disabled"
+                if (enabled) "Filter rules enabled for this sync" else "Filter rules paused for this sync"
             )
         }
     }

@@ -19,5 +19,7 @@ class SyncedOtpRepository(private val dao: SyncedOtpDao) {
     suspend fun purgeExpired(nowEpochMs: Long = System.currentTimeMillis()) =
         dao.purgeExpired(nowEpochMs)
 
+    suspend fun deleteByChainId(chainId: String) = dao.deleteByChainId(chainId)
+
     suspend fun clearAll() = dao.clearAll()
 }

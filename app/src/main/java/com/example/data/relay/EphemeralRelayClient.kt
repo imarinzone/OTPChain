@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -22,6 +23,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 sealed interface RelayConnectionState {
@@ -32,7 +34,29 @@ sealed interface RelayConnectionState {
     data class Error(val message: String) : RelayConnectionState
 }
 
+data class RelaySubscription(
+    val chainId: String,
+    val relayBaseUrl: String,
+    val blindedTopic: String,
+    val shouldListen: Boolean
+)
+
+data class IncomingRelayMessage(
+    val chainId: String,
+    val ciphertext: String
+)
+
 class EphemeralRelayClient {
+    private class ChainSession(
+        val chainId: String,
+        var relayBaseUrl: String,
+        var topic: String,
+        var shouldBeConnected: Boolean = false,
+        var webSocket: WebSocket? = null,
+        var reconnectJob: Job? = null,
+        var reconnectAttempts: Int = 0
+    )
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val client = OkHttpClient.Builder()
@@ -47,18 +71,13 @@ class EphemeralRelayClient {
     private val streamAdapter = moshi.adapter(NtfyStreamPacket::class.java)
     private val envelopeAdapter = moshi.adapter(RelayEnvelope::class.java)
 
-    private val _connectionState = MutableStateFlow<RelayConnectionState>(RelayConnectionState.Unpaired)
-    val connectionState: StateFlow<RelayConnectionState> = _connectionState.asStateFlow()
+    private val sessions = ConcurrentHashMap<String, ChainSession>()
 
-    private val _incomingCiphertexts = MutableSharedFlow<String>(extraBufferCapacity = 64)
-    val incomingCiphertexts: SharedFlow<String> = _incomingCiphertexts.asSharedFlow()
+    private val _chainStates = MutableStateFlow<Map<String, RelayConnectionState>>(emptyMap())
+    val chainStates: StateFlow<Map<String, RelayConnectionState>> = _chainStates.asStateFlow()
 
-    private var activeWebSocket: WebSocket? = null
-    private var reconnectJob: Job? = null
-    private var currentRelayBaseUrl: String? = null
-    private var currentTopic: String? = null
-    private var shouldBeConnected: Boolean = false
-    private var reconnectAttempts: Int = 0
+    private val _incomingMessages = MutableSharedFlow<IncomingRelayMessage>(extraBufferCapacity = 64)
+    val incomingMessages: SharedFlow<IncomingRelayMessage> = _incomingMessages.asSharedFlow()
 
     fun encodeEnvelope(envelope: RelayEnvelope): String = envelopeAdapter.toJson(envelope)
 
@@ -66,81 +85,109 @@ class EphemeralRelayClient {
         envelopeAdapter.fromJson(json)
     }.getOrNull()
 
-    fun updateSubscription(
-        hasChain: Boolean,
-        shouldListen: Boolean,
-        relayBaseUrl: String,
-        blindedTopic: String?
-    ) {
-        if (!hasChain || blindedTopic.isNullOrBlank()) {
-            disconnect(RelayConnectionState.Unpaired)
-            return
-        }
-        if (!shouldListen) {
-            disconnect(RelayConnectionState.Paused)
-            return
+    fun updateSubscriptions(subscriptions: List<RelaySubscription>) {
+        val activeIds = subscriptions.map { it.chainId }.toSet()
+
+        // Disconnect removed chains
+        val removedIds = sessions.keys.filterNot { it in activeIds }
+        removedIds.forEach { removedId ->
+            sessions.remove(removedId)?.let { session ->
+                closeSession(session)
+            }
+            _chainStates.update { it - removedId }
         }
 
-        val normalizedBase = relayBaseUrl.trim().trimEnd('/')
-        if (shouldBeConnected &&
-            currentRelayBaseUrl == normalizedBase &&
-            currentTopic == blindedTopic &&
-            activeWebSocket != null
-        ) {
-            return
-        }
+        // Update or create sessions for active chains
+        subscriptions.forEach { sub ->
+            val normalizedBase = sub.relayBaseUrl.trim().trimEnd('/')
+            val existing = sessions[sub.chainId]
 
-        shouldBeConnected = true
-        currentRelayBaseUrl = normalizedBase
-        currentTopic = blindedTopic
-        reconnectAttempts = 0
-        connectInternal()
+            if (!sub.shouldListen || sub.blindedTopic.isBlank()) {
+                if (existing != null) {
+                    closeSession(existing)
+                }
+                setChainState(
+                    sub.chainId,
+                    if (sub.blindedTopic.isBlank()) RelayConnectionState.Unpaired else RelayConnectionState.Paused
+                )
+                return@forEach
+            }
+
+            if (existing != null &&
+                existing.shouldBeConnected &&
+                existing.relayBaseUrl == normalizedBase &&
+                existing.topic == sub.blindedTopic &&
+                existing.webSocket != null
+            ) {
+                return@forEach
+            }
+
+            val session = existing?.apply {
+                closeSession(this)
+                relayBaseUrl = normalizedBase
+                topic = sub.blindedTopic
+                shouldBeConnected = true
+                reconnectAttempts = 0
+            } ?: ChainSession(
+                chainId = sub.chainId,
+                relayBaseUrl = normalizedBase,
+                topic = sub.blindedTopic,
+                shouldBeConnected = true
+            ).also { sessions[sub.chainId] = it }
+
+            connectSession(session)
+        }
     }
 
-    private fun disconnect(targetState: RelayConnectionState) {
-        shouldBeConnected = false
-        currentTopic = null
-        reconnectJob?.cancel()
-        reconnectJob = null
-        activeWebSocket?.close(1000, "Client paused or disconnected")
-        activeWebSocket = null
-        _connectionState.value = targetState
+    private fun closeSession(session: ChainSession) {
+        session.shouldBeConnected = false
+        session.reconnectJob?.cancel()
+        session.reconnectJob = null
+        session.webSocket?.close(1000, "Client paused or disconnected")
+        session.webSocket = null
     }
 
-    private fun connectInternal() {
-        val baseUrl = currentRelayBaseUrl ?: return
-        val topic = currentTopic ?: return
-        if (!shouldBeConnected) return
+    private fun setChainState(chainId: String, state: RelayConnectionState) {
+        _chainStates.update { current -> current + (chainId to state) }
+    }
 
-        reconnectJob?.cancel()
-        activeWebSocket?.close(1000, "Reconnecting")
-        activeWebSocket = null
+    private fun connectSession(session: ChainSession) {
+        if (!session.shouldBeConnected) return
 
-        _connectionState.value = RelayConnectionState.Connecting
+        session.reconnectJob?.cancel()
+        session.webSocket?.close(1000, "Reconnecting")
+        session.webSocket = null
+
+        setChainState(session.chainId, RelayConnectionState.Connecting)
 
         val wsBase = when {
-            baseUrl.startsWith("https://") -> "wss://" + baseUrl.removePrefix("https://")
-            baseUrl.startsWith("http://") -> "ws://" + baseUrl.removePrefix("http://")
-            else -> "wss://$baseUrl"
+            session.relayBaseUrl.startsWith("https://") -> "wss://" + session.relayBaseUrl.removePrefix("https://")
+            session.relayBaseUrl.startsWith("http://") -> "ws://" + session.relayBaseUrl.removePrefix("http://")
+            else -> "wss://${session.relayBaseUrl}"
         }
-        val wsUrl = "$wsBase/$topic/ws"
+        val wsUrl = "$wsBase/${session.topic}/ws"
 
         val request = Request.Builder()
             .url(wsUrl)
             .build()
 
-        activeWebSocket = client.newWebSocket(request, object : WebSocketListener() {
+        session.webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                if (webSocket != activeWebSocket) return
-                reconnectAttempts = 0
-                _connectionState.value = RelayConnectionState.Connected
+                if (webSocket != session.webSocket) return
+                session.reconnectAttempts = 0
+                setChainState(session.chainId, RelayConnectionState.Connected)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                if (webSocket != activeWebSocket) return
+                if (webSocket != session.webSocket) return
                 val packet = runCatching { streamAdapter.fromJson(text) }.getOrNull()
                 if (packet?.event == "message" && !packet.message.isNullOrBlank()) {
-                    _incomingCiphertexts.tryEmit(packet.message)
+                    _incomingMessages.tryEmit(
+                        IncomingRelayMessage(
+                            chainId = session.chainId,
+                            ciphertext = packet.message
+                        )
+                    )
                 }
             }
 
@@ -149,35 +196,36 @@ class EphemeralRelayClient {
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                if (webSocket != activeWebSocket) return
-                activeWebSocket = null
-                if (shouldBeConnected) {
-                    scheduleReconnect()
+                if (webSocket != session.webSocket) return
+                session.webSocket = null
+                if (session.shouldBeConnected) {
+                    scheduleReconnect(session)
                 }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                if (webSocket != activeWebSocket) return
-                activeWebSocket = null
-                if (shouldBeConnected) {
-                    _connectionState.value = RelayConnectionState.Error(
-                        t.localizedMessage ?: "Relay connection interrupted"
+                if (webSocket != session.webSocket) return
+                session.webSocket = null
+                if (session.shouldBeConnected) {
+                    setChainState(
+                        session.chainId,
+                        RelayConnectionState.Error(t.localizedMessage ?: "Relay connection interrupted")
                     )
-                    scheduleReconnect()
+                    scheduleReconnect(session)
                 }
             }
         })
     }
 
-    private fun scheduleReconnect() {
-        if (!shouldBeConnected) return
-        reconnectJob?.cancel()
-        reconnectJob = scope.launch {
-            val backoffMs = (2000L * (1L shl reconnectAttempts.coerceAtMost(4))).coerceAtMost(30_000L)
-            reconnectAttempts++
+    private fun scheduleReconnect(session: ChainSession) {
+        if (!session.shouldBeConnected) return
+        session.reconnectJob?.cancel()
+        session.reconnectJob = scope.launch {
+            val backoffMs = (2000L * (1L shl session.reconnectAttempts.coerceAtMost(4))).coerceAtMost(30_000L)
+            session.reconnectAttempts++
             delay(backoffMs)
-            if (shouldBeConnected) {
-                connectInternal()
+            if (session.shouldBeConnected && sessions[session.chainId] === session) {
+                connectSession(session)
             }
         }
     }
